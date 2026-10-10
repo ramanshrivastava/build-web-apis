@@ -17,9 +17,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 const SMOKE_CLIENTS: usize = 50;
 
-async fn handle(mut stream: TcpStream, quiet: bool) {
+async fn handle(mut stream: TcpStream, quiet: bool, buf_size: usize) {
     let port = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
-    let mut buf = vec![0u8; 65536];
+    let mut buf = vec![0u8; buf_size];
     let mut echoed = 0usize;
     loop {
         // Pending until the I/O driver sees the fd readable, then read(2) runs.
@@ -49,9 +49,9 @@ async fn listen(port: u16) -> std::io::Result<TcpListener> {
     Ok(listener)
 }
 
-async fn serve(listener: TcpListener, quiet: bool) {
+async fn serve(listener: TcpListener, quiet: bool, buf_size: usize) {
     while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(handle(stream, quiet));
+        tokio::spawn(handle(stream, quiet, buf_size));
     }
 }
 
@@ -75,7 +75,7 @@ async fn smoke(port: u16) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    tokio::spawn(serve(listener, true));
+    tokio::spawn(serve(listener, true, 65536));
     let clients: Vec<_> = (0..SMOKE_CLIENTS)
         .map(|n| tokio::spawn(one_client(port, n)))
         .collect();
@@ -101,6 +101,7 @@ async fn smoke(port: u16) -> ExitCode {
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut port: u16 = 9006;
+    let mut buf_size: usize = 65536;
     let mut smoke_mode = false;
     let mut i = 0;
     while i < args.len() {
@@ -109,6 +110,10 @@ async fn main() -> ExitCode {
             "--port" => {
                 i += 1;
                 port = args.get(i).and_then(|p| p.parse().ok()).unwrap_or(port);
+            }
+            "--buf-size" => {
+                i += 1;
+                buf_size = args.get(i).and_then(|b| b.parse().ok()).unwrap_or(buf_size);
             }
             other => {
                 println!("echo-tokio: unknown argument {other}");
@@ -122,7 +127,7 @@ async fn main() -> ExitCode {
     }
     match listen(port).await {
         Ok(listener) => {
-            serve(listener, false).await;
+            serve(listener, false, buf_size).await;
             ExitCode::SUCCESS
         }
         Err(e) => {
