@@ -54,9 +54,8 @@ strace -f -e trace=listen,accept4,read,write,close,ioctl,/^epoll -o "$cap" \
 server=$!
 wait_listen
 B_HOLD=0.8 clients
-see_log "\$ ls -l /proc/<pid>/fd   # pid of the epoll server"
-pid="$(pgrep -f -n "$demo --mode epoll")"
-see_log "$(find "/proc/$pid/fd" -mindepth 1 -printf '%f -> %l\n' | sort -n)"
+pid="$(pgrep -f -n "$demo --mode epoll")" # the epoll server (strace's child)
+see_sh "find /proc/$pid/fd -mindepth 1 -printf '%f -> %l\n' | sort -n"
 see_sh "lsof -nP -a -p $pid -d 3-20 | awk '{print \$4, \$5, \$8, \$9}'"
 wait "$server" || true
 see_log "\$ strace -f -e trace=listen,accept4,read,write,close,ioctl,/^epoll python3 $demo --mode epoll --max-clients 2"
