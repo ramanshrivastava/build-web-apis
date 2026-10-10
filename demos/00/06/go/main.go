@@ -5,12 +5,13 @@
 // runtime's netpoller (runtime/netpoll_epoll.go) wakes it when epoll says the
 // fd is readable.
 //
+// The handler is an explicit Read/Write loop on purpose: io.Copy(conn, conn)
+// would take the TCPConn.ReadFrom fast path and move the bytes with splice(),
+// hiding the read() -> EAGAIN -> park -> read() sequence the lesson traces.
+//
 //	go run main.go                   # serve on 127.0.0.1:9006
 //	go run main.go --buf-size 4096   # 4 KiB per-connection buffer
 //	go run main.go --smoke           # 50 concurrent clients, self-checking
-//
-// Minimal version written by the Author so lesson 0.6 can strace it; the
-// Porter refines it against PORT-SPEC.md.
 package main
 
 import (
@@ -23,6 +24,8 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 const smokeClients = 50
@@ -76,6 +79,7 @@ func oneClient(port, number int) bool {
 		return false
 	}
 	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second)) // a stuck server fails the smoke, not the 60 s cap
 	message := []byte(fmt.Sprintf("hello from client %d\n", number))
 	if _, err := conn.Write(message); err != nil {
 		return false
@@ -91,22 +95,20 @@ func smoke(port int) int {
 	ln := listen(port)
 	go serve(ln, true, 65536)
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	ok := 0
+	var echoed atomic.Int32 // 50 goroutines count into it at once
 	for n := 0; n < smokeClients; n++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
 			if oneClient(port, n) {
-				mu.Lock()
-				ok++
-				mu.Unlock()
+				echoed.Add(1)
 			}
 		}(n)
 	}
 	wg.Wait()
 	ln.Close()
-	threads := pprof.Lookup("threadcreate").Count()
+	ok := int(echoed.Load())
+	threads := pprof.Lookup("threadcreate").Count() // OS threads the runtime has created so far
 	if ok == smokeClients {
 		fmt.Printf("smoke: OK, %d concurrent clients echoed by %d threads\n", ok, threads)
 		return 0
