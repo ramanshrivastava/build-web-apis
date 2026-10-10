@@ -1,0 +1,294 @@
+# CI for the course. Free-tier rules: ubuntu-latest only, cancel superseded
+# runs, paths-filtered jobs, caches for every toolchain, a timeout on every job.
+# If Actions minutes run out, run `just ci-local` and note it in the PR body.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["m*"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read # dorny/paths-filter lists PR files via the API
+
+env:
+  DATABASE_URL: postgres://postgres:ticketing@localhost:5432/ticketing
+  REDIS_URL: redis://localhost:6379/0
+
+jobs:
+  changes:
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      go: ${{ steps.filter.outputs.go }}
+      rust: ${{ steps.filter.outputs.rust }}
+      docs: ${{ steps.filter.outputs.docs }}
+      demos: ${{ steps.filter.outputs.demos }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared: &shared
+              - 'db/**'
+              - 'justfile'
+              - '.github/workflows/ci.yml'
+            python:
+              - *shared
+              - 'apps/python/**'
+            go:
+              - *shared
+              - 'apps/go/**'
+            rust:
+              - *shared
+              - 'apps/rust/**'
+            docs:
+              - '**/*.md'
+              - 'docs/**'
+              - 'scripts/lint_lessons.py'
+              - '.github/workflows/ci.yml'
+            demos:
+              - 'demos/**'
+              - 'scripts/see/**'
+              - 'scripts/capture/**'
+              - 'justfile'
+              - '.github/workflows/ci.yml'
+            infra:
+              - 'infra/**'
+              - 'docker-compose.yml'
+              - '.github/workflows/ci.yml'
+
+  docs:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lesson skeleton lint
+        run: python3 scripts/lint_lessons.py
+      - name: Link check (offline, links resolve from the repo root)
+        run: |
+          git ls-files -z '*.md' | xargs -0 docker run --rm -v "$PWD:/input:ro" -w /input \
+            lycheeverse/lychee:0.24.2 --offline --no-progress --base-url file:///input/
+      - name: Cache npm and the Puppeteer browser
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/puppeteer
+          key: mermaid-cli-11-${{ runner.os }}
+      - name: Render every Mermaid fence
+        run: |
+          out="$RUNNER_TEMP/mermaid"
+          python3 scripts/lint_lessons.py --extract-mermaid "$out"
+          # Ubuntu 24.04 blocks Chrome's user-namespace sandbox on runners.
+          echo '{"args": ["--no-sandbox"]}' > "$RUNNER_TEMP/puppeteer.json"
+          failed=0
+          for f in "$out"/*.mmd; do
+            [ -e "$f" ] || continue
+            # mmdc refuses -o /dev/null (it requires a .svg/.png/.pdf/.md name).
+            if ! npx -y @mermaid-js/mermaid-cli@11 -p "$RUNNER_TEMP/puppeteer.json" \
+                 -i "$f" -o "${f%.mmd}.svg" >/dev/null; then
+              echo "::error title=Broken Mermaid diagram::$(basename "$f")"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+  python:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Job services cannot take `command:`, so log_statement and
+    # pg_stat_statements from docker-compose.yml are absent in CI.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ticketing
+          POSTGRES_DB: ticketing
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ticketing"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    defaults:
+      run:
+        working-directory: apps/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/python/uv.lock
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: ../../scripts/migrate.sh
+      - run: uv run pytest
+
+  go:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ticketing
+          POSTGRES_DB: ticketing
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ticketing"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    defaults:
+      run:
+        working-directory: apps/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/go/go.mod
+          cache-dependency-path: apps/go/go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.1.6
+          working-directory: apps/go
+      - run: ../../scripts/migrate.sh
+      - run: go test -race ./...
+
+  rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ticketing
+          POSTGRES_DB: ticketing
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ticketing"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    defaults:
+      run:
+        working-directory: apps/rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/rust
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: ../../scripts/migrate.sh
+      - run: cargo test --locked
+
+  demos:
+    needs: changes
+    if: >-
+      needs.changes.outputs.demos == 'true' || needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.go == 'true' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI_OFFLINE: "1" # network demos (0.2, 3.6) skip themselves
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/python/uv.lock
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/go/go.mod
+          cache-dependency-path: apps/go/go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Observation tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tcpdump strace
+      - run: just demo-smoke
+
+  lab:
+    # Keeps the lab image buildable; only runs when infra/ or compose changes.
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - run: docker build --progress=plain -t build-web-apis-lab infra/lab
+
+  tags:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ticketing
+          POSTGRES_DB: ticketing
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ticketing"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # check-tags.sh needs the tag and a worktree
+      - uses: extractions/setup-just@v2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/python/uv.lock
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/go/go.mod
+          cache-dependency-path: apps/go/go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/rust
+      - run: scripts/check-tags.sh "$GITHUB_REF_NAME"
