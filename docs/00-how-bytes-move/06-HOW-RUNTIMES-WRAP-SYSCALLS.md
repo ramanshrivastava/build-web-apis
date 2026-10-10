@@ -463,7 +463,7 @@ pure Python does not, and every other connection waits for it.
 
 ## 6. Code: Go
 
-The Go port is the same echo server on `net.Listen` with one goroutine per connection. Its handler must use an explicit `Read`/`Write` loop over a per-connection buffer (`--buf-size`, default 64 KiB), not `io.Copy(conn, conn)`: on Linux `io.Copy` between two TCP connections takes the `ReadFrom` fast path and moves bytes with `splice()`, which would hide the very `read()` → `EAGAIN` → park sequence the See It traces. The startup banner reports `GOMAXPROCS` and the runtime's `threadcreate` profile count, so the reader sees the P and M counts before any client connects. The minimal version the See It traced looks like this:
+The Go port is the same echo server on `net.Listen` with one goroutine per connection. Its handler must use an explicit `Read`/`Write` loop over a per-connection buffer (`--buf-size`, default 64 KiB), not `io.Copy(conn, conn)`: on Linux `io.Copy` between two TCP connections takes the `ReadFrom` fast path and moves bytes with `splice()`, which would hide the very `read()` → `EAGAIN` → park sequence the See It traces. The startup banner reports `GOMAXPROCS` and the runtime's `threadcreate` profile count, so the reader sees the P and M counts before any client connects. The handler the See It traces:
 
 ```go
 func handle(conn net.Conn, quiet bool, bufSize int) {
