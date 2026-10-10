@@ -27,6 +27,8 @@ trap cleanup EXIT
 see_sh() { see_log "\$ $1"; see_log "$(bash -c "$1" 2>&1)"; }
 sockets="( sport = :9003 or dport = :9003 )"
 see_log "# kernel $(uname -r), $(sysctl -n net.ipv4.tcp_congestion_control) congestion control"
+see_run sysctl net.ipv4.tcp_congestion_control net.ipv4.tcp_available_congestion_control \
+  net.ipv4.tcp_rmem net.ipv4.tcp_wmem net.core.rmem_max
 
 see_log "## 1. a slow reader closes the window"
 nstat -n # remember the counters now; the next nstat prints the difference
