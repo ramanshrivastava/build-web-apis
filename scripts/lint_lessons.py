@@ -13,13 +13,19 @@ except 00-OVERVIEW.md) it enforces:
   * exactly one H2 "## K. See It: <what>"
   * at least one ```mermaid fence
   * H2s "Code: Python", "Code: Go", "Code: Rust", once each, in that order
-  * no markdown links starting with ./ or ../ (links are repo-root-relative)
-  * **Next:**, **Previous:** and **Module Overview:** links exist and resolve
-    from the repo root (Module Overview -> this folder's 00-OVERVIEW.md)
-  * a "Key Files Summary" table whose first-column paths exist
+  * **Next:**, **Previous:** and **Module Overview:** links are present
+    (Module Overview -> this folder's 00-OVERVIEW.md)
+  * a "Key Files Summary" table whose first-column paths exist (link targets
+    resolve from the file; paths written as `code` are repo-root paths)
 
 For each 00-OVERVIEW.md: if its lesson table marks any lesson "Done", the
 folder must contain diagrams/hero.{mmd,svg,png,excalidraw}.
+
+For every markdown file under docs/ (lessons, overviews, conventions, the
+spec), every relative link must resolve from the file that contains it, the
+way GitHub resolves it. A link that resolves only from the repo root (for
+example "docs/01-http-by-hand/00-OVERVIEW.md" written inside docs/) is
+rejected with the file-relative path to use instead.
 
 Headings, links and callouts inside fenced code blocks are ignored.
 
@@ -35,10 +41,12 @@ from __future__ import annotations
 
 import argparse
 import glob
+import os
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import unquote
 
 MODULE_DIR_RE = re.compile(r"^\d{2}-.+$")
 LESSON_FILE_RE = re.compile(r"^(\d{2})-.+\.md$")
@@ -59,6 +67,7 @@ REFDEF_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(\S+)")
 INLINE_CODE_RE = re.compile(r"`+[^`]*`+")
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 TABLE_SEP_RE = re.compile(r"^\|?[\s:|-]+\|?$")
+URL_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")  # https:, mailto:, ...
 HERO_FILES = ("hero.mmd", "hero.svg", "hero.png", "hero.excalidraw")
 CODE_ORDER = ("Python", "Go", "Rust")
 
@@ -130,11 +139,14 @@ def split_row(row: str) -> list[str]:
     return cells
 
 
-def cell_paths(cell: str) -> list[str]:
-    """Paths named in a Key Files cell: link targets, else code spans, else the text."""
-    links = re.findall(r"\]\(([^)\s]+)\)", cell)
-    if links:
-        return links
+def cell_root_paths(cell: str) -> list[str]:
+    """Repo-root paths named in a Key Files cell: code spans, else the plain text.
+
+    Cells that hold a link are skipped here: link targets are file-relative and
+    are checked with every other link.
+    """
+    if re.search(r"\]\([^)\s]+\)", cell):
+        return []
     spans = re.findall(r"`([^`]+)`", cell)
     if spans:
         return spans
@@ -157,6 +169,7 @@ class Linter:
         self.problems: list[tuple[str, int, str]] = []
         self.lessons_checked = 0
         self.overviews_checked = 0
+        self.link_checked: set[Path] = set()
 
     def report(self, path: Path, line: int, message: str) -> None:
         self.problems.append((str(path.relative_to(self.root)), line, message))
@@ -170,14 +183,52 @@ class Linter:
     def run(self) -> int:
         for module in self.module_dirs():
             self.lint_module(module)
+        docs = self.root / "docs"
+        others = sorted(p for p in docs.rglob("*.md") if p not in self.link_checked)
+        for path in others:
+            self.check_links(path, parse(path.read_text(encoding="utf-8")).prose)
         for path, line, message in sorted(self.problems):
             print(f"{path}:{line}: {message}")
         print(
             f"lint_lessons: {len(self.module_dirs())} module(s), {self.lessons_checked} lesson(s), "
-            f"{self.overviews_checked} overview(s) checked; {len(self.problems)} problem(s)",
+            f"{self.overviews_checked} overview(s) checked, links checked in "
+            f"{len(self.link_checked)} file(s); {len(self.problems)} problem(s)",
             file=sys.stderr,
         )
         return 1 if self.problems else 0
+
+    def link_problem(self, path: Path, target: str) -> str | None:
+        """Why `target` (a link in `path`) is broken, or None if it resolves from `path`."""
+        if URL_RE.match(target) or target.startswith("#"):
+            return None
+        clean = unquote(target.split("#", 1)[0].split("?", 1)[0])
+        if not clean:
+            return None
+        if clean.startswith("/"):
+            return f"link '{target}' starts with '/'; write it relative to this file"
+        resolved = (path.parent / clean).resolve()
+        inside = resolved == self.root or self.root in resolved.parents
+        if inside and resolved.exists():
+            return None
+        if not clean.startswith("../") and (self.root / clean).exists():
+            rel = os.path.relpath(self.root / clean, path.parent)
+            rel = rel if rel.startswith("../") else "./" + rel
+            if clean.endswith("/"):
+                rel += "/"
+            return f"link '{target}' resolves only from the repo root; from this file write '{rel}'"
+        if not inside:
+            return f"link '{target}' points outside the repo"
+        return f"link '{target}' does not resolve from this file"
+
+    def check_links(self, path: Path, prose: list[tuple[int, str]]) -> None:
+        """Every inline link, image and reference definition must resolve from `path`."""
+        self.link_checked.add(path)
+        for n, line in prose:
+            stripped = INLINE_CODE_RE.sub("", line)
+            for target in LINK_RE.findall(stripped) + REFDEF_RE.findall(stripped):
+                problem = self.link_problem(path, target)
+                if problem:
+                    self.report(path, n, problem)
 
     def lint_module(self, module: Path) -> None:
         overview = module / OVERVIEW
@@ -204,6 +255,7 @@ class Linter:
     def lint_overview(self, path: Path) -> None:
         self.overviews_checked += 1
         md = parse(path.read_text(encoding="utf-8"))
+        self.check_links(path, md.prose)
         status_col: int | None = None
         done_line: int | None = None
         for number, line in md.prose:
@@ -281,11 +333,6 @@ class Linter:
             if code:
                 code_h2.append((n, code.group(1)))
             stripped = INLINE_CODE_RE.sub("", line)
-            for target in LINK_RE.findall(stripped) + REFDEF_RE.findall(stripped):
-                if target.startswith(("./", "../")):
-                    self.report(
-                        path, n, f"link '{target}' must be repo-root-relative (no ./ or ../)"
-                    )
             for label, link, target in NAV_RE.findall(stripped):
                 nav.setdefault(label, []).append((n, target if link else None))
 
@@ -296,6 +343,7 @@ class Linter:
             )
         if not any(f.lang == "mermaid" for f in md.fences):
             self.report(path, 1, "need at least one ```mermaid diagram")
+        self.check_links(path, prose)
         self.check_code_order(path, code_h2)
         self.check_nav(path, nav, last_line=max(len(lines), 1))
         self.check_key_files(path, prose)
@@ -317,30 +365,24 @@ class Linter:
     def check_nav(
         self, path: Path, nav: dict[str, list[tuple[int, str | None]]], last_line: int
     ) -> None:
-        own_overview = (path.parent / OVERVIEW).relative_to(self.root).as_posix()
+        own_overview = (path.parent / OVERVIEW).resolve()
         for label in ("Next", "Previous", "Module Overview"):
             entries = nav.get(label)
             if not entries:
-                self.report(path, last_line, f'missing "**{label}:** [..](docs/...)" link')
+                self.report(path, last_line, f'missing "**{label}:** [..](./...)" link')
                 continue
             for n, target in entries:
                 if not target:
                     self.report(path, n, f'"**{label}:**" must be followed by a markdown link')
                     continue
-                clean = target.split("#", 1)[0]
-                if re.match(r"^[a-z]+:", clean) or clean.startswith("/"):
+                if URL_RE.match(target):
+                    self.report(path, n, f"{label} link '{target}' must be a relative path")
+                    continue
+                # Whether it resolves is checked with every other link (check_links).
+                resolved = (path.parent / unquote(target.split("#", 1)[0])).resolve()
+                if label == "Module Overview" and resolved.exists() and resolved != own_overview:
                     self.report(
-                        path, n, f"{label} link '{target}' must be a repo-root-relative path"
-                    )
-                elif not (self.root / clean).exists():
-                    self.report(
-                        path,
-                        n,
-                        f"{label} link '{target}' does not exist (resolved from the repo root)",
-                    )
-                elif label == "Module Overview" and clean != own_overview:
-                    self.report(
-                        path, n, f"Module Overview must link to {own_overview}, not '{target}'"
+                        path, n, f"Module Overview must link to ./{OVERVIEW}, not '{target}'"
                     )
 
     def check_key_files(self, path: Path, prose: list[tuple[int, str]]) -> None:
@@ -360,10 +402,13 @@ class Linter:
         if not data:
             self.report(path, prose[start][0], "Key Files Summary table has no rows")
         for n, row in data:
-            for target in cell_paths(split_row(row)[0]):
+            for target in cell_root_paths(split_row(row)[0]):
                 if not path_exists(self.root, target):
                     self.report(
-                        path, n, f"Key Files path '{target}' does not exist (from the repo root)"
+                        path,
+                        n,
+                        f"Key Files path '{target}' does not exist "
+                        "(paths in `code` are repo-root paths)",
                     )
 
 

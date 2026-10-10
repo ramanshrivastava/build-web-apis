@@ -77,10 +77,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Lesson skeleton lint
         run: python3 scripts/lint_lessons.py
-      - name: Link check (offline, links resolve from the repo root)
+      - name: Link check (offline, each link resolved relative to its file)
         run: |
           git ls-files -z '*.md' | xargs -0 docker run --rm -v "$PWD:/input:ro" -w /input \
-            lycheeverse/lychee:0.24.2 --offline --no-progress --base-url file:///input/
+            lycheeverse/lychee:0.24.2 --offline --no-progress
       - name: Cache npm and the Puppeteer browser
         uses: actions/cache@v4
         with:

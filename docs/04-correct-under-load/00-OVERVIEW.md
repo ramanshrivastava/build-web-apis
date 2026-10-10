@@ -28,7 +28,7 @@ When thousands of writers converge on one row, **what makes the flow stop safely
 | 4.4 | Outbox and Background Jobs (`04-OUTBOX-AND-BACKGROUND-JOBS.md`) | Planned |
 | 4.5 | Proving It: A Stampede Test (`05-PROVING-IT-A-STAMPEDE-TEST.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 4.1 Transactions and Isolation Levels
 
@@ -89,11 +89,11 @@ A load harness asserting `COUNT(sold) == DISTINCT seats`; it becomes CI job `sta
 
 ## Cross-references
 
-- **Base module:** [`docs/02-rest-done-properly/00-OVERVIEW.md`](docs/02-rest-done-properly/00-OVERVIEW.md) provides the store and migrations this module extends (tag `m2`).
-- **Distributed APIs:** [`docs/07-distributed-apis/00-OVERVIEW.md`](docs/07-distributed-apis/00-OVERVIEW.md) re-runs this module's stampede invariant across shards and regions in lesson 7.6.
-- **Module gate:** M4: every write path has an idempotency test. See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **Base module:** [`docs/02-rest-done-properly/00-OVERVIEW.md`](../02-rest-done-properly/00-OVERVIEW.md) provides the store and migrations this module extends (tag `m2`).
+- **Distributed APIs:** [`docs/07-distributed-apis/00-OVERVIEW.md`](../07-distributed-apis/00-OVERVIEW.md) re-runs this module's stampede invariant across shards and regions in lesson 7.6.
+- **Module gate:** M4: every write path has an idempotency test. See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 5 lessons (4.1–4.5) are planned and none are written yet. The module lands as one PR from branch `module/04-correct-under-load` and is tagged `m4` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 5 lessons (4.1–4.5) are planned and none are written yet. The module lands as one PR from branch `module/04-correct-under-load` and is tagged `m4` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.

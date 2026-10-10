@@ -53,7 +53,7 @@ Shared artifacts change once per module, at pre-assigned numbers: migrations (M2
 
 - [ ] `docs/NN-slug/00-OVERVIEW.md`: thesis, what/why, lesson table all `Done`, not-covered, cross-refs, flow-question paragraph; hero diagram rendered in `diagrams/`.
 - [ ] README syllabus block complete for the module; no `*Coming soon*` left.
-- [ ] Every lesson passes `scripts/lint_lessons.py` (header N of M, Reality-check form, one See It, ≥1 Mermaid, Py→Go→Rs order, root links, resolving Next/Previous, Key Files exist).
+- [ ] Every lesson passes `scripts/lint_lessons.py` (header N of M, Reality-check form, one See It, ≥1 Mermaid, Py→Go→Rs order, file-relative links, resolving Next/Previous, Key Files exist).
 - [ ] Every See It names ≥2 tools with exact commands and expected-output excerpts; `demos/NN/LL/see.sh` exits 0 in lab and in CI, printing a line matching its declared `EXPECT=` regex.
 - [ ] `demos/NN/LL/{python,go,rust}` run via `just demo`, `--smoke` under 60 s, no external network (0.2 and 3.6 excepted, skipped with `CI_OFFLINE=1`).
 - [ ] All three ports pass `just test` and `just lint`; previous subcommands still start and answer `GET /events`.
@@ -71,17 +71,18 @@ In this repo the README placeholder marker is `*Planned*`; "no `*Coming soon*` l
 - every `> [!WARNING]` immediately followed by `> **Reality check (<slug>) —** <text>`
 - exactly one `## K. See It: …` H2, at least one ```` ```mermaid ```` fence
 - `Code: Python`, `Code: Go`, `Code: Rust` H2s, once each, in that order
-- no `./` or `../` links; `**Next:**`, `**Previous:**` and `**Module Overview:**` links that resolve from the repo root
+- `**Next:**`, `**Previous:**` and `**Module Overview:**` links are present (Module Overview is `./00-OVERVIEW.md`)
+- every link resolves from the file that contains it (file-relative, as GitHub renders it); a link that resolves only from the repo root fails, and the error names the relative path to use
 - every path in the `## Key Files Summary` table exists
 
 For overviews: once any lesson is `Done`, `diagrams/hero.{mmd,svg,png,excalidraw}` must exist. Problems print as `path:line: message`, and the exit code is 1:
 
 ```text
 docs/01-http-by-hand/02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md:3: header says of 4 but the folder has 5 lesson file(s)
-docs/01-http-by-hand/02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md:212: link './03-KEEP-ALIVE-AND-PIPELINING.md' must be repo-root-relative (no ./ or ../)
+docs/01-http-by-hand/02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md:212: link 'docs/01-http-by-hand/03-KEEP-ALIVE-AND-PIPELINING.md' resolves only from the repo root; from this file write './03-KEEP-ALIVE-AND-PIPELINING.md'
 ```
 
-Headings and links inside code fences are ignored, so bash comments starting with `##` are safe. `python3 scripts/lint_lessons.py --root PATH` lints another checkout. The link check (`lychee --offline --base-url file://<repo>/`) resolves every relative link from the repo root, the same rule the site sync uses. CI also renders every Mermaid fence with `mmdc`, so a diagram that does not parse fails the build.
+Headings and links inside code fences are ignored, so bash comments starting with `##` are safe. `python3 scripts/lint_lessons.py --root PATH` lints another checkout. The link rule covers every markdown file under `docs/`, not only lessons. The CI link check (`lychee --offline`) resolves links the same way, relative to each file, across all tracked markdown. CI also renders every Mermaid fence with `mmdc`, so a diagram that does not parse fails the build.
 
 ## Author and Porter Ownership
 

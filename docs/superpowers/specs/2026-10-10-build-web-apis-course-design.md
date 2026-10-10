@@ -33,7 +33,7 @@ The user's guiding ideas, in their words:
 
 - Global lesson numbering broke twice on renames → per-module folders, per-module numbering, pre-assigned migration numbers.
 - "Part N of M" headers drifted → one header form, enforced by a linter in CI.
-- Lesson links use `./` so the site sync never rewrites them → repo-root-relative links only, linted.
+- Lesson links used `./`, which the site sync never rewrote because it looks links up by repo-root path → file-relative links (what GitHub renders), every link linted to resolve from its own file, and the sync taught to resolve links per file (see Conventions).
 - No CI, no lesson lint → both exist from Phase 0 (free tier only).
 - Module 7 docs left uncommitted → one PR per module; nothing lands outside a PR.
 
@@ -79,10 +79,12 @@ The user's guiding ideas, in their words:
 ## Summary             | Concept | Key Takeaway |
 ## Checklist: What You Should Be Able to Explain   (- [ ] items)
 
-**Next:** [docs/…](docs/…)  **Previous:** [docs/…](docs/…)  **Module Overview:** [docs/NN-slug/00-OVERVIEW.md](…)
+**Next:** [./LL+1-….md](./…)  **Previous:** [./LL-1-….md](./…)  **Module Overview:** [./00-OVERVIEW.md](./00-OVERVIEW.md)
 ```
 
-Enforced by `scripts/lint_lessons.py` (CI job `docs`): header regex and N/M agree with folder count; every `> [!WARNING]` followed by `> **Reality check ([\w-]+) —** `; exactly one `## \d+\. See It:` H2; ≥1 ```` ```mermaid ```` block; three code H2s in Python/Go/Rust order; links repo-root-relative (reject `./`, `../`); Next/Previous/Module Overview present and resolving; Key Files paths exist.
+Enforced by `scripts/lint_lessons.py` (CI job `docs`): header regex and N/M agree with folder count; every `> [!WARNING]` followed by `> **Reality check ([\w-]+) —** `; exactly one `## \d+\. See It:` H2; ≥1 ```` ```mermaid ```` block; three code H2s in Python/Go/Rust order; every link resolves relative to the file that contains it (a link that resolves only from the repo root is rejected); Next/Previous/Module Overview present and resolving; Key Files paths exist.
+
+Links are file-relative, which is what GitHub renders: `./02-….md` within a module, `../02-rest-done-properly/00-OVERVIEW.md` across modules, `../../apps/python/…` for code. Root files (README, CLAUDE.md, CONTRIBUTING.md) use `docs/…`, which is already relative. The raman-folio sync (`scripts/sync-teaching-content.mjs`) must resolve each relative link against the lesson's `sourcePath` before looking it up, since today it matches repo-root paths only.
 
 ### See It tool palette (authors pick from, lessons name exact invocations)
 
@@ -233,7 +235,7 @@ CI (`ci.yml`, ubuntu-latest only, `concurrency: cancel-in-progress`, `timeout-mi
 
 - [ ] `docs/NN-slug/00-OVERVIEW.md`: thesis, what/why, lesson table all `Done`, not-covered, cross-refs, flow-question paragraph; hero diagram rendered in `diagrams/`.
 - [ ] README syllabus block complete for the module; no `*Coming soon*` left.
-- [ ] Every lesson passes `scripts/lint_lessons.py` (header N of M, Reality-check form, one See It, ≥1 Mermaid, Py→Go→Rs order, root links, resolving Next/Previous, Key Files exist).
+- [ ] Every lesson passes `scripts/lint_lessons.py` (header N of M, Reality-check form, one See It, ≥1 Mermaid, Py→Go→Rs order, file-relative links, resolving Next/Previous, Key Files exist).
 - [ ] Every See It names ≥2 tools with exact commands and expected-output excerpts; `demos/NN/LL/see.sh` exits 0 in lab and in CI, printing a line matching its declared `EXPECT=` regex.
 - [ ] `demos/NN/LL/{python,go,rust}` run via `just demo`, `--smoke` under 60 s, no external network (0.2 and 3.6 excepted, skipped with `CI_OFFLINE=1`).
 - [ ] All three ports pass `just test` and `just lint`; previous subcommands still start and answer `GET /events`.

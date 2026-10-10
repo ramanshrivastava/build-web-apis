@@ -29,7 +29,7 @@ Performance work without measurement is guessing, and most published numbers are
 | 6.5 | Structured Logs and Metrics (`05-STRUCTURED-LOGS-AND-METRICS.md`) | Planned |
 | 6.6 | Tracing and SLOs (`06-TRACING-AND-SLOS.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 6.1 Benchmarking Honestly
 
@@ -101,11 +101,11 @@ Trace context propagation by hand, then the OpenTelemetry SDK; SLOs and error bu
 
 ## Cross-references
 
-- **Previous modules:** [`docs/05-auth-and-the-edge/00-OVERVIEW.md`](docs/05-auth-and-the-edge/00-OVERVIEW.md) Modules 3–5 provide the services, nginx and Redis this module measures (tags `m3`–`m5`).
+- **Previous modules:** [`docs/05-auth-and-the-edge/00-OVERVIEW.md`](../05-auth-and-the-edge/00-OVERVIEW.md) Modules 3–5 provide the services, nginx and Redis this module measures (tags `m3`–`m5`).
 - **build-ai-agents agent-ops:** [`docs/agent-ops/00-OVERVIEW.md`](https://github.com/ramanshrivastava/build-ai-agents/blob/main/docs/agent-ops/00-OVERVIEW.md) applies the same observability discipline to agent systems.
-- **Module gate:** M6: no lesson without a before/after number. See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **Module gate:** M6: no lesson without a before/after number. See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 6 lessons (6.1–6.6) are planned and none are written yet. The module lands as one PR from branch `module/06-fast-and-observable` and is tagged `m6` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 6 lessons (6.1–6.6) are planned and none are written yet. The module lands as one PR from branch `module/06-fast-and-observable` and is tagged `m6` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.

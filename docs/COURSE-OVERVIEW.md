@@ -76,15 +76,15 @@ The first "Key mental model" in every lesson is that module's version of this qu
 
 | Module | Folder | Title | What the app gains | Tag |
 |--------|--------|-------|--------------------|-----|
-| **0** | [`docs/00-how-bytes-move/`](docs/00-how-bytes-move/00-OVERVIEW.md) | How Bytes Move | Nothing yet: demos and the lab. Signals → frames → IP → TCP → kernel buffers → syscalls → runtimes | `m0` |
-| **1** | [`docs/01-http-by-hand/`](docs/01-http-by-hand/00-OVERVIEW.md) | HTTP by Hand | `ticketing rawhttp`: a stdlib-only HTTP/1.1 server serving `GET /events` | `m1` |
-| **2** | [`docs/02-rest-done-properly/`](docs/02-rest-done-properly/00-OVERVIEW.md) | REST Done Properly | `ticketing api`: framework-based CRUD on Postgres, beside the raw server | `m2` |
-| **3** | [`docs/03-other-api-shapes/`](docs/03-other-api-shapes/00-OVERVIEW.md) | Other API Shapes | GraphQL reads, `ticketing inventory-grpc`, a live seat map, payment webhooks | `m3` |
-| **4** | [`docs/04-correct-under-load/`](docs/04-correct-under-load/00-OVERVIEW.md) | Correct Under Load | `POST /orders` with no double sales, idempotency keys, outbox, `ticketing worker` | `m4` |
-| **5** | [`docs/05-auth-and-the-edge/`](docs/05-auth-and-the-edge/00-OVERVIEW.md) | Auth and the Edge | TLS, users and sessions, OIDC, API keys, a rate limiter, nginx in front | `m5` |
-| **6** | [`docs/06-fast-and-observable/`](docs/06-fast-and-observable/00-OVERVIEW.md) | Fast and Observable | Benchmarks, profiles, tuned pools, caching, logs, metrics, traces, SLOs | `m6` |
-| **7** | [`docs/07-distributed-apis/`](docs/07-distributed-apis/00-OVERVIEW.md) | Distributed APIs | `ticketing lb`, shards and replicas, resilience, sagas, a two-region on-sale run | `m7` |
-| **8** | [`docs/08-run-it/`](docs/08-run-it/00-OVERVIEW.md) | Run It | Non-root images, Kubernetes on kind, zero-error rollouts, versioning, the capstone | `m8` |
+| **0** | [`docs/00-how-bytes-move/`](./00-how-bytes-move/00-OVERVIEW.md) | How Bytes Move | Nothing yet: demos and the lab. Signals → frames → IP → TCP → kernel buffers → syscalls → runtimes | `m0` |
+| **1** | [`docs/01-http-by-hand/`](./01-http-by-hand/00-OVERVIEW.md) | HTTP by Hand | `ticketing rawhttp`: a stdlib-only HTTP/1.1 server serving `GET /events` | `m1` |
+| **2** | [`docs/02-rest-done-properly/`](./02-rest-done-properly/00-OVERVIEW.md) | REST Done Properly | `ticketing api`: framework-based CRUD on Postgres, beside the raw server | `m2` |
+| **3** | [`docs/03-other-api-shapes/`](./03-other-api-shapes/00-OVERVIEW.md) | Other API Shapes | GraphQL reads, `ticketing inventory-grpc`, a live seat map, payment webhooks | `m3` |
+| **4** | [`docs/04-correct-under-load/`](./04-correct-under-load/00-OVERVIEW.md) | Correct Under Load | `POST /orders` with no double sales, idempotency keys, outbox, `ticketing worker` | `m4` |
+| **5** | [`docs/05-auth-and-the-edge/`](./05-auth-and-the-edge/00-OVERVIEW.md) | Auth and the Edge | TLS, users and sessions, OIDC, API keys, a rate limiter, nginx in front | `m5` |
+| **6** | [`docs/06-fast-and-observable/`](./06-fast-and-observable/00-OVERVIEW.md) | Fast and Observable | Benchmarks, profiles, tuned pools, caching, logs, metrics, traces, SLOs | `m6` |
+| **7** | [`docs/07-distributed-apis/`](./07-distributed-apis/00-OVERVIEW.md) | Distributed APIs | `ticketing lb`, shards and replicas, resilience, sagas, a two-region on-sale run | `m7` |
+| **8** | [`docs/08-run-it/`](./08-run-it/00-OVERVIEW.md) | Run It | Non-root images, Kubernetes on kind, zero-error rollouts, versioning, the capstone | `m8` |
 
 Check out a tag to see the app exactly as a module left it: `git checkout m4`. Compare two modules with `git diff m3 m4 -- apps/python`.
 
@@ -182,7 +182,7 @@ Python first, then Go, then Rust. The same function has the same name in all thr
 
 ### Links
 
-Links inside the course are repo-root-relative (`docs/01-http-by-hand/00-OVERVIEW.md`), never `./` or `../`, so the course site can publish them unchanged.
+Links are file-relative, the way GitHub renders them: from a lesson, `./02-….md` reaches the next lesson, `../02-rest-done-properly/00-OVERVIEW.md` another module, and `../../apps/python/…` the code. The linter and the CI link check resolve every link from the file that contains it, and the course site resolves each link against the lesson's source path.
 
 ---
 
@@ -246,4 +246,4 @@ Kernel-facing lessons (Module 0, lessons 1.5, 6.2 and 8.2) are the most version-
 
 ---
 
-**Next Steps**: start with [`docs/00-how-bytes-move/00-OVERVIEW.md`](docs/00-how-bytes-move/00-OVERVIEW.md) to watch a byte travel, or jump to [`docs/01-http-by-hand/00-OVERVIEW.md`](docs/01-http-by-hand/00-OVERVIEW.md) if you already know the network stack.
+**Next Steps**: start with [`docs/00-how-bytes-move/00-OVERVIEW.md`](./00-how-bytes-move/00-OVERVIEW.md) to watch a byte travel, or jump to [`docs/01-http-by-hand/00-OVERVIEW.md`](./01-http-by-hand/00-OVERVIEW.md) if you already know the network stack.

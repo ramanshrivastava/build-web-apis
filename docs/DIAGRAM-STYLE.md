@@ -22,7 +22,7 @@ Every lesson has at least one Mermaid diagram, and every module has a rendered h
 3. **Two accents, always.** `flow` marks where data moves; `stop` marks where it waits, is buffered, is refused or is locked. Use only these two class accents, so the question is visible in every figure.
 4. **First figure in the first mechanism section**, followed by an italic caption: `*Figure 1 — What the reader should notice.*` Number figures per lesson.
 5. **Label edges with what crosses them**: bytes, frames, syscalls, messages (`"SYN"`, `"read() = 4096"`, `"HEADERS + DATA"`).
-6. **Hero diagrams.** Each module has `docs/NN-slug/diagrams/hero.mmd`, rendered with the `/diagram` skill into `hero.excalidraw`, `hero.svg` and `hero.png`. Once a lesson is `Done`, the overview embeds `hero.svg` under its thesis, and the linter requires all four files. Module 8's hero (the full-stack journey of one `POST /orders`) doubles as the README's top image.
+6. **Hero diagrams.** Each module has `docs/NN-slug/diagrams/hero.mmd`, rendered with the `/diagram` skill into `hero.excalidraw`, `hero.svg` and `hero.png`. Once a lesson is `Done`, the overview embeds `hero.svg` under its thesis with a file-relative image link (`![Module 1 hero](./diagrams/hero.svg)`), and the linter requires all four files. Module 8's hero (the full-stack journey of one `POST /orders`) doubles as the README's top image.
 
 ## The Accents
 

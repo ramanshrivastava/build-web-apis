@@ -36,7 +36,7 @@ Shared by all three ports, and changed once per module: `db/migrations/NNNN_name
 |-------|-------|
 | Global lesson numbers (`docs/23-…`) | Per-module folders and numbering: `docs/NN-slug/LL-TITLE.md` |
 | `**Part 3 of 9**`, or any other header form | Line 3 `**Lesson N of M: <Module name>**`, line 4 `**Ticketing Project**` |
-| Links like `./02-X.md` or `../01-…/X.md` | Repo-root-relative links: `docs/01-http-by-hand/02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md` |
+| A repo-root path as a link target inside `docs/` (`[…](docs/01-http-by-hand/02-….md)` in a lesson) | File-relative links, as GitHub renders them: `./02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md`, `../02-rest-done-properly/00-OVERVIEW.md`, `../../apps/python/…`. Root files (README, CLAUDE.md, CONTRIBUTING.md) keep `docs/…`, which is already relative |
 | `**Reality Check:**` or `> **Reality check —**` without a slug | `> [!WARNING]` then `> **Reality check (kebab-slug) —** …` |
 | Go or Rust code before Python | `Code: Python` → `Code: Go` → `Code: Rust`, always |
 | Describing output you did not capture | Run the command, paste a 3–10 line excerpt, and make `see.sh` assert it via `EXPECT=` |

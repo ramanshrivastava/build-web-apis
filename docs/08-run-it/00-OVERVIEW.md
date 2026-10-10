@@ -28,7 +28,7 @@ Shipping is a flow problem too: **how do you change the running system without d
 | 8.4 | API Versioning and Deprecation (`04-API-VERSIONING-AND-DEPRECATION.md`) | Planned |
 | 8.5 | The Whole Picture (`05-THE-WHOLE-PICTURE.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 8.1 Containers for Three Runtimes
 
@@ -89,12 +89,12 @@ Capstone: one `POST /orders` from keypress to confirmation through every layer b
 
 ## Cross-references
 
-- **Previous module:** [`docs/07-distributed-apis/00-OVERVIEW.md`](docs/07-distributed-apis/00-OVERVIEW.md) is the system this module ships (tag `m7`). Lessons 8.1 and 8.4 may be built alongside Module 7.
+- **Previous module:** [`docs/07-distributed-apis/00-OVERVIEW.md`](../07-distributed-apis/00-OVERVIEW.md) is the system this module ships (tag `m7`). Lessons 8.1 and 8.4 may be built alongside Module 7.
 - **build-ai-agents infra-arch:** [`docs/infra-arch/01-KUBERNETES-FUNDAMENTALS.md`](https://github.com/ramanshrivastava/build-ai-agents/blob/main/docs/infra-arch/01-KUBERNETES-FUNDAMENTALS.md) Kubernetes fundamentals; also docs 05, 10 and 11 of that series.
-- **Course overview:** [`docs/COURSE-OVERVIEW.md`](docs/COURSE-OVERVIEW.md) where lesson 8.5's Next link returns.
-- **Module gate:** M8: images run as non-root. See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **Course overview:** [`docs/COURSE-OVERVIEW.md`](../COURSE-OVERVIEW.md) where lesson 8.5's Next link returns.
+- **Module gate:** M8: images run as non-root. See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 5 lessons (8.1–8.5) are planned and none are written yet. The module lands as one PR from branch `module/08-run-it` and is tagged `m8` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 5 lessons (8.1–8.5) are planned and none are written yet. The module lands as one PR from branch `module/08-run-it` and is tagged `m8` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.

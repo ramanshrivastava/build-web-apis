@@ -8,7 +8,7 @@
 
 Module 0 has no app code. It follows one byte from a voltage change on a wire to the moment a Python coroutine, a goroutine or a Rust future resumes with it. There are six steps: the physical layer and the NIC, addressing and routing, TCP's flow and congestion control, the kernel's buffers and queues, the socket syscalls, and how the three runtimes wrap those syscalls.
 
-Each lesson ships a small demo in all three languages (an `AF_PACKET` sniffer, a hand-built DNS query, a deliberately slow reader, a server that never calls `accept()`, and raw `epoll` echo servers) and observes it with `tcpdump`, `ss`, `strace` and `/proc` in the lab. The module also hardens the tooling every later lesson depends on: [`infra/lab/Dockerfile`](infra/lab/Dockerfile), [`scripts/capture/`](scripts/capture/) and [`scripts/see/common.sh`](scripts/see/common.sh).
+Each lesson ships a small demo in all three languages (an `AF_PACKET` sniffer, a hand-built DNS query, a deliberately slow reader, a server that never calls `accept()`, and raw `epoll` echo servers) and observes it with `tcpdump`, `ss`, `strace` and `/proc` in the lab. The module also hardens the tooling every later lesson depends on: [`infra/lab/Dockerfile`](../../infra/lab/Dockerfile), [`scripts/capture/`](../../scripts/capture/) and [`scripts/see/common.sh`](../../scripts/see/common.sh).
 
 ## Why a dedicated module
 
@@ -29,7 +29,7 @@ The course asks one question at every layer: **what makes data flow, and what ma
 | 0.5 | Socket Syscalls (`05-SOCKET-SYSCALLS.md`) | Planned |
 | 0.6 | How Runtimes Wrap Syscalls (`06-HOW-RUNTIMES-WRAP-SYSCALLS.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 0.1 Electrons to Frames
 
@@ -101,12 +101,12 @@ CPython's `socketmodule.c` and GIL release, `selectors.py`, asyncio transports; 
 
 ## Cross-references
 
-- **Next module:** [`docs/01-http-by-hand/00-OVERVIEW.md`](docs/01-http-by-hand/00-OVERVIEW.md) puts HTTP on top of these sockets.
+- **Next module:** [`docs/01-http-by-hand/00-OVERVIEW.md`](../01-http-by-hand/00-OVERVIEW.md) puts HTTP on top of these sockets.
 - **build-ai-agents server-arch:** [`docs/server-arch/01-SYNC-VS-ASYNC.md`](https://github.com/ramanshrivastava/build-ai-agents/blob/main/docs/server-arch/01-SYNC-VS-ASYNC.md) covers sync vs async from the application side; lesson 0.6 goes underneath it.
-- **See It toolbox:** [`docs/SEE-IT-TOOLBOX.md`](docs/SEE-IT-TOOLBOX.md) lists every tool this module introduces, and the lab's kernel caveats.
-- **Module gate:** M0: no app code; `apps/` stays untouched (demos, scripts and the lab only). See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **See It toolbox:** [`docs/SEE-IT-TOOLBOX.md`](../SEE-IT-TOOLBOX.md) lists every tool this module introduces, and the lab's kernel caveats.
+- **Module gate:** M0: no app code; `apps/` stays untouched (demos, scripts and the lab only). See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 6 lessons (0.1–0.6) are planned and none are written yet. The module lands as one PR from branch `module/00-how-bytes-move` and is tagged `m0` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 6 lessons (0.1–0.6) are planned and none are written yet. The module lands as one PR from branch `module/00-how-bytes-move` and is tagged `m0` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.

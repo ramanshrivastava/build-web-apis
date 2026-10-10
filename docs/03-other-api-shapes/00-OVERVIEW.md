@@ -29,7 +29,7 @@ Each API shape is a different contract for **who pushes data and when**, so each
 | 3.5 | Webhooks (`05-WEBHOOKS.md`) | Planned |
 | 3.6 | HTTP/3 and QUIC (`06-HTTP3-AND-QUIC.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 3.1 GraphQL Executor by Hand
 
@@ -101,11 +101,11 @@ QUIC streams over UDP, handshake latency, and when HTTP/3 does not help.
 
 ## Cross-references
 
-- **Previous module:** [`docs/02-rest-done-properly/00-OVERVIEW.md`](docs/02-rest-done-properly/00-OVERVIEW.md) is the base this module branches from (tag `m2`).
-- **Parallel modules:** [`docs/04-correct-under-load/00-OVERVIEW.md`](docs/04-correct-under-load/00-OVERVIEW.md) Modules 4 and 5 are built alongside this one, with disjoint packages; merge order is 3 → 4 → 5.
-- **Module gate:** M3: no DB tables outside migration `0003`. See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **Previous module:** [`docs/02-rest-done-properly/00-OVERVIEW.md`](../02-rest-done-properly/00-OVERVIEW.md) is the base this module branches from (tag `m2`).
+- **Parallel modules:** [`docs/04-correct-under-load/00-OVERVIEW.md`](../04-correct-under-load/00-OVERVIEW.md) Modules 4 and 5 are built alongside this one, with disjoint packages; merge order is 3 → 4 → 5.
+- **Module gate:** M3: no DB tables outside migration `0003`. See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 6 lessons (3.1–3.6) are planned and none are written yet. The module lands as one PR from branch `module/03-other-api-shapes` and is tagged `m3` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 6 lessons (3.1–3.6) are planned and none are written yet. The module lands as one PR from branch `module/03-other-api-shapes` and is tagged `m3` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.

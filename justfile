@@ -74,17 +74,17 @@ lint-go:
 lint-rust:
     cd apps/rust && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
 
-# Lesson skeleton linter + offline link check (lychee, or its docker image)
+# Lesson skeleton linter + offline link check, links relative to each file (lychee or its image)
 lint-docs:
     #!/usr/bin/env bash
     set -euo pipefail
     python3 scripts/lint_lessons.py
     files="$(git ls-files --cached --others --exclude-standard '*.md')"
     if command -v lychee >/dev/null 2>&1; then
-      lychee --offline --no-progress --base-url "file://$PWD/" $files
+      lychee --offline --no-progress $files
     elif docker info >/dev/null 2>&1; then
       docker run --rm -v "$PWD:/input:ro" -w /input lycheeverse/lychee:0.24.2 \
-        --offline --no-progress --base-url file:///input/ $files
+        --offline --no-progress $files
     else
       echo "lint-docs: neither lychee nor docker available; link check skipped" >&2
     fi

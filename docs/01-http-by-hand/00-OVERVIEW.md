@@ -28,7 +28,7 @@ On a TCP stream, **what tells the receiver where one request ends and the next b
 | 1.4 | A Tiny Router (`04-A-TINY-ROUTER.md`) | Planned |
 | 1.5 | Three Concurrency Models (`05-THREE-CONCURRENCY-MODELS.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 1.1 Request Line and Headers
 
@@ -90,11 +90,11 @@ Threads, an event loop, goroutines and tasks; slow-client backpressure.
 
 ## Cross-references
 
-- **Previous module:** [`docs/00-how-bytes-move/00-OVERVIEW.md`](docs/00-how-bytes-move/00-OVERVIEW.md) explains the sockets, buffers and syscalls this server sits on.
-- **Next module:** [`docs/02-rest-done-properly/00-OVERVIEW.md`](docs/02-rest-done-properly/00-OVERVIEW.md) puts REST semantics and a framework on top, and keeps `rawhttp` running beside it.
-- **Module gate:** M1: stdlib only, no frameworks or HTTP libraries in any port. See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **Previous module:** [`docs/00-how-bytes-move/00-OVERVIEW.md`](../00-how-bytes-move/00-OVERVIEW.md) explains the sockets, buffers and syscalls this server sits on.
+- **Next module:** [`docs/02-rest-done-properly/00-OVERVIEW.md`](../02-rest-done-properly/00-OVERVIEW.md) puts REST semantics and a framework on top, and keeps `rawhttp` running beside it.
+- **Module gate:** M1: stdlib only, no frameworks or HTTP libraries in any port. See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 5 lessons (1.1–1.5) are planned and none are written yet. The module lands as one PR from branch `module/01-http-by-hand` and is tagged `m1` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 5 lessons (1.1–1.5) are planned and none are written yet. The module lands as one PR from branch `module/01-http-by-hand` and is tagged `m1` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.

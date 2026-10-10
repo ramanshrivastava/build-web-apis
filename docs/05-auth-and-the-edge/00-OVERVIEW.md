@@ -8,7 +8,7 @@
 
 Everything between the internet and the handler: the TLS 1.3 handshake, observed and then decrypted; identity with password hashing, cookie sessions in Redis and a JWT built by hand; OAuth 2.0 and OIDC with PKCE against a local `dex`; API keys and CORS; rate limiting by hand (token bucket, sliding window, a Redis Lua limiter); and nginx as a reverse proxy in front of the app.
 
-The app gains `api --tls`, users and sessions, OIDC login, API keys, a limiter middleware and an `edge` compose profile with nginx. Migrations `0007`–`0008` belong to this module, and [`scripts/certs.sh`](scripts/certs.sh) already creates the local certificates.
+The app gains `api --tls`, users and sessions, OIDC login, API keys, a limiter middleware and an `edge` compose profile with nginx. Migrations `0007`–`0008` belong to this module, and [`scripts/certs.sh`](../../scripts/certs.sh) already creates the local certificates.
 
 ## Why a dedicated module
 
@@ -29,7 +29,7 @@ At the edge the question becomes **who is allowed to flow?** TLS decides whether
 | 5.5 | Rate Limiting by Hand (`05-RATE-LIMITING-BY-HAND.md`) | Planned |
 | 5.6 | Reverse Proxies and API Gateways (`06-REVERSE-PROXIES-AND-API-GATEWAYS.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 5.1 TLS Handshake
 
@@ -100,11 +100,11 @@ nginx in front of the app; what a gateway adds; trusting forwarded headers.
 
 ## Cross-references
 
-- **Base module:** [`docs/02-rest-done-properly/00-OVERVIEW.md`](docs/02-rest-done-properly/00-OVERVIEW.md) provides the API this module puts behind TLS, auth and a proxy (tag `m2`).
+- **Base module:** [`docs/02-rest-done-properly/00-OVERVIEW.md`](../02-rest-done-properly/00-OVERVIEW.md) provides the API this module puts behind TLS, auth and a proxy (tag `m2`).
 - **build-ai-agents infra-arch:** [`docs/infra-arch/10-NGINX-PROXIES-AND-INGRESS.md`](https://github.com/ramanshrivastava/build-ai-agents/blob/main/docs/infra-arch/10-NGINX-PROXIES-AND-INGRESS.md) configures nginx and Ingress; lesson 5.6 builds what that configuration does.
-- **Module gate:** M5: nothing listens in plaintext outside compose. See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **Module gate:** M5: nothing listens in plaintext outside compose. See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 6 lessons (5.1–5.6) are planned and none are written yet. The module lands as one PR from branch `module/05-auth-and-the-edge` and is tagged `m5` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 6 lessons (5.1–5.6) are planned and none are written yet. The module lands as one PR from branch `module/05-auth-and-the-edge` and is tagged `m5` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.

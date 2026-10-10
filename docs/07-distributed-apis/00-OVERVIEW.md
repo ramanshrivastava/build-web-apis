@@ -29,7 +29,7 @@ When flow spreads across boxes, **what keeps it balanced, and what stops it from
 | 7.5 | Sagas (`05-SAGAS.md`) | Planned |
 | 7.6 | On-Sale Day and Multi-Region (`06-ON-SALE-DAY-AND-MULTI-REGION.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 7.1 L7 Load Balancer by Hand
 
@@ -100,11 +100,11 @@ Two "regions" in compose, region-aware routing, global vs local state, failover,
 
 ## Cross-references
 
-- **Previous module:** [`docs/06-fast-and-observable/00-OVERVIEW.md`](docs/06-fast-and-observable/00-OVERVIEW.md) provides the benchmarks, pools and traces this module relies on to see a distributed request (tag `m6`).
-- **Correct Under Load:** [`docs/04-correct-under-load/00-OVERVIEW.md`](docs/04-correct-under-load/00-OVERVIEW.md) defines the stampede invariant that lesson 7.6 must keep across regions.
-- **Module gate:** M7: the `cluster` profile passes the 4.5 invariant. See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **Previous module:** [`docs/06-fast-and-observable/00-OVERVIEW.md`](../06-fast-and-observable/00-OVERVIEW.md) provides the benchmarks, pools and traces this module relies on to see a distributed request (tag `m6`).
+- **Correct Under Load:** [`docs/04-correct-under-load/00-OVERVIEW.md`](../04-correct-under-load/00-OVERVIEW.md) defines the stampede invariant that lesson 7.6 must keep across regions.
+- **Module gate:** M7: the `cluster` profile passes the 4.5 invariant. See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 6 lessons (7.1–7.6) are planned and none are written yet. The module lands as one PR from branch `module/07-distributed-apis` and is tagged `m7` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 6 lessons (7.1–7.6) are planned and none are written yet. The module lands as one PR from branch `module/07-distributed-apis` and is tagged `m7` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.

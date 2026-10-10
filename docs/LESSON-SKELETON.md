@@ -5,7 +5,7 @@
 
 ---
 
-Every lesson in `docs/NN-slug/LL-TITLE.md` follows this skeleton. `scripts/lint_lessons.py` enforces the structural parts (header, Reality-check form, one See It, at least one Mermaid diagram, Python → Go → Rust order, root-relative links, resolving Next/Previous/Module Overview, existing Key Files). Review enforces the rest.
+Every lesson in `docs/NN-slug/LL-TITLE.md` follows this skeleton. `scripts/lint_lessons.py` enforces the structural parts (header, Reality-check form, one See It, at least one Mermaid diagram, Python → Go → Rust order, file-relative links that resolve, Next/Previous/Module Overview present, existing Key Files). Review enforces the rest.
 
 Copy the template below, replace every `<…>`, and delete the guidance comments.
 
@@ -220,7 +220,7 @@ just see <mm>/<ll>
 
 ---
 
-**Next:** [docs/<NN-slug>/<LL+1>-<TITLE>.md](docs/<NN-slug>/<LL+1>-<TITLE>.md) · **Previous:** [docs/<NN-slug>/<LL-1>-<TITLE>.md](docs/<NN-slug>/<LL-1>-<TITLE>.md) · **Module Overview:** [docs/<NN-slug>/00-OVERVIEW.md](docs/<NN-slug>/00-OVERVIEW.md)
+**Next:** [<LL+1>-<TITLE>.md](./<LL+1>-<TITLE>.md) · **Previous:** [<LL-1>-<TITLE>.md](./<LL-1>-<TITLE>.md) · **Module Overview:** [00-OVERVIEW.md](./00-OVERVIEW.md)
 ````
 
 ## Rules Behind the Template
@@ -270,17 +270,26 @@ At least one ```` ```mermaid ```` fence per lesson, in the first mechanism secti
 
 ### Key Files Summary (linted: paths exist)
 
-The first column holds repo-root paths in backticks (or as links). Every path must exist when the lesson merges. List the demo files, the app files in all three ports and the `see.sh`.
+The first column holds repo-root paths in backticks, such as `apps/python/src/ticketing/rawhttp/parser.py`. Backticked paths are display text, so they are resolved from the repo root. If you make a cell a link, its target is file-relative like every other link: `[parser.py](../../apps/python/src/ticketing/rawhttp/parser.py)`. Every path must exist when the lesson merges. List the demo files, the app files in all three ports and the `see.sh`.
 
 ### Links (linted)
 
-All links are repo-root-relative: `[docs/01-http-by-hand/02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md](docs/01-http-by-hand/02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md)`. Never use `./` or `../`. The course site resolves links by their repo path, and the CI link check resolves every relative link from the repo root.
+Links are file-relative, the way GitHub renders them. From a lesson in `docs/01-http-by-hand/`:
+
+| Target | Link |
+|--------|------|
+| A lesson in the same module | `[02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md](./02-BODIES-CONTENT-LENGTH-AND-CHUNKED.md)` |
+| Another module | `[docs/02-rest-done-properly/00-OVERVIEW.md](../02-rest-done-properly/00-OVERVIEW.md)` |
+| Course-wide docs | `[docs/SEE-IT-TOOLBOX.md](../SEE-IT-TOOLBOX.md)` |
+| App code or demos | `[parser.py](../../apps/python/src/ticketing/rawhttp/parser.py)` |
+
+`scripts/lint_lessons.py` resolves every link from the file that contains it. A link that resolves only from the repo root (`docs/02-rest-done-properly/00-OVERVIEW.md` written inside `docs/`) fails, and the error names the relative path to use. Links starting with `/` fail too. The CI link check (lychee) resolves the same way, and the course site resolves each link against the lesson's source path.
 
 ### Next / Previous / Module Overview (linted: present and resolving)
 
-- **Next**: the next lesson. The last lesson of a module links to the next module's `00-OVERVIEW.md`, and lesson 8.5 links to `docs/COURSE-OVERVIEW.md`.
-- **Previous**: the previous lesson. The first lesson of a module links to the previous module's last lesson, and lesson 0.1 links to `docs/COURSE-OVERVIEW.md`.
-- **Module Overview**: this folder's `00-OVERVIEW.md`.
+- **Next**: the next lesson (`./02-….md`). The last lesson of a module links to the next module's overview (`../02-rest-done-properly/00-OVERVIEW.md`), and lesson 8.5 links to `../COURSE-OVERVIEW.md`.
+- **Previous**: the previous lesson. The first lesson of a module links to the previous module's last lesson (`../00-how-bytes-move/06-HOW-RUNTIMES-WRAP-SYSCALLS.md`), and lesson 0.1 links to `../COURSE-OVERVIEW.md`.
+- **Module Overview**: `./00-OVERVIEW.md`.
 
 Because targets must exist, link the next lesson only once it exists. Until then, point Next at the module overview.
 

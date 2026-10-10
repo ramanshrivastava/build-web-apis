@@ -28,7 +28,7 @@ When a request flows through a framework into Postgres, **which layers add bytes
 | 2.4 | Frameworks and What They Do for You (`04-FRAMEWORKS-AND-WHAT-THEY-DO-FOR-YOU.md`) | Planned |
 | 2.5 | Postgres and the Wire Protocol (`05-POSTGRES-AND-THE-WIRE-PROTOCOL.md`) | Planned |
 
-Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](docs/LESSON-SKELETON.md).
+Status moves `Planned` → `In progress` → `Done`. Lesson files appear in this folder as `NN-TITLE.md` and follow [`docs/LESSON-SKELETON.md`](../LESSON-SKELETON.md).
 
 ### 2.1 Resources, Methods and Idempotency
 
@@ -90,12 +90,12 @@ Parse/Bind/Execute, prepared statements, drivers (asyncpg, pgx, sqlx), migration
 
 ## Cross-references
 
-- **Previous module:** [`docs/01-http-by-hand/00-OVERVIEW.md`](docs/01-http-by-hand/00-OVERVIEW.md) built the raw server this module's framework replaces (and keeps running).
-- **Next modules:** [`docs/03-other-api-shapes/00-OVERVIEW.md`](docs/03-other-api-shapes/00-OVERVIEW.md) Modules 3, 4 and 5 branch from tag `m2` in parallel.
+- **Previous module:** [`docs/01-http-by-hand/00-OVERVIEW.md`](../01-http-by-hand/00-OVERVIEW.md) built the raw server this module's framework replaces (and keeps running).
+- **Next modules:** [`docs/03-other-api-shapes/00-OVERVIEW.md`](../03-other-api-shapes/00-OVERVIEW.md) Modules 3, 4 and 5 branch from tag `m2` in parallel.
 - **build-ai-agents server-arch:** [`docs/server-arch/03-FASTAPI-ASYNC-ARCHITECTURE.md`](https://github.com/ramanshrivastava/build-ai-agents/blob/main/docs/server-arch/03-FASTAPI-ASYNC-ARCHITECTURE.md) FastAPI's async architecture from the application side; lesson 2.4 shows the syscalls under it.
-- **Module gate:** M2: frameworks allowed, but the raw server must still run. See [`CLAUDE.md`](CLAUDE.md), "Module Gates".
-- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
+- **Module gate:** M2: frameworks allowed, but the raw server must still run. See [`CLAUDE.md`](../../CLAUDE.md), "Module Gates".
+- **Design spec:** [`docs/superpowers/specs/2026-10-10-build-web-apis-course-design.md`](../superpowers/specs/2026-10-10-build-web-apis-course-design.md) has the binding conventions and this module's full lesson plan.
 
 ## Status
 
-Module overview stub, written in Phase 0. All 5 lessons (2.1–2.5) are planned and none are written yet. The module lands as one PR from branch `module/02-rest-done-properly` and is tagged `m2` when the definition of done in [`CONTRIBUTING.md`](CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
+Module overview stub, written in Phase 0. All 5 lessons (2.1–2.5) are planned and none are written yet. The module lands as one PR from branch `module/02-rest-done-properly` and is tagged `m2` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes. The hero diagram (`diagrams/hero.mmd`, rendered to `.excalidraw`, `.svg` and `.png`) is drawn with the module and embedded under the thesis once the first lesson is `Done`.
