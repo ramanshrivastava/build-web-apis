@@ -430,9 +430,71 @@ received.
 
 ## 6. Code: Go
 
-The Go port, `demos/00/03/go/main.go`, must accept the same flags (`--port`, `--rcvbuf`, `--read-size`, `--interval`, `--seconds`, `--smoke`) and print the same lines, so `see.sh` can observe it unchanged. What differs is how Go reaches the socket before it connects. `net.Dial` creates, configures and connects the socket in one call, and `TCPConn.SetReadBuffer` only exists after the connection is up, which is too late for the window scale. The port must use a `net.Dialer` with a `Control` function that calls `syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, n)` on the raw fd before `connect()`, then read the granted size back with `syscall.GetsockoptInt`. The sender runs in a goroutine, so its counters (`sent`, the send start time, the longest block) must be `sync/atomic` values that the reader loop reads. `--rcvbuf 0` skips the `Control` hook. Note one default that differs from Python: Go enables `TCP_NODELAY` on every TCP connection it creates (`newTCPConn()` in `net/tcpsock.go` calls `setNoDelay(fd, true)`); it does not change this demo's numbers, but it matters for the reality check below.
+The Go port, `demos/00/03/go/main.go`, must accept the same flags (`--port`, `--rcvbuf`, `--read-size`, `--interval`, `--seconds`, `--smoke`) and print the same lines, so `see.sh` can observe it unchanged. What differs is how Go reaches the socket before it connects. `net.Dial` creates, configures and connects the socket in one call, and `TCPConn.SetReadBuffer` only exists after the connection is up, which is too late for the window scale. The port must use a `net.Dialer` with a `Control` function that calls `syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, n)` on the raw fd before `connect()`, then read the granted size back with `syscall.GetsockoptInt`. The sender runs in a goroutine, so its counters (`sent`, the send start time, the longest block) must be `sync/atomic` values that the reader loop reads. With `--rcvbuf 0` the hook only reads the starting size. Note one default that differs from Python: Go enables `TCP_NODELAY` on every TCP connection it creates (`newTCPConn()` in `net/tcpsock.go` calls `setNoDelay(fd, true)`); it does not change this demo's numbers, but it matters for the reality check below.
 
-<!-- PORTER: fill from demos/00/03/go/main.go -->
+Here is the hook. `raw.Control` runs the function with the fd that `net` has created and not yet connected; the setsockopt error is carried out of the closure in a variable, because the error `Control` itself returns only says whether the fd was available:
+
+```go
+func connectReader(port, rcvbuf int) (net.Conn, error) {
+	var granted int
+	dialer := net.Dialer{
+		// Control runs after socket() and before connect(): the SYN carries the
+		// window scale chosen from this buffer, and setting it also turns off
+		// receive-buffer autotuning for this socket.
+		Control: func(network, address string, raw syscall.RawConn) error {
+			var opErr error
+			err := raw.Control(func(fd uintptr) {
+				if rcvbuf > 0 {
+					opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, rcvbuf)
+				}
+				if opErr == nil {
+					granted, opErr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF)
+				}
+			})
+			if err != nil {
+				return err
+			}
+			return opErr
+		},
+	}
+	conn, err := dialer.Dial("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return nil, err
+	}
+	if rcvbuf > 0 {
+		fmt.Printf("slowreader: reader SO_RCVBUF asked %d, kernel set %d\n", rcvbuf, granted)
+	} else {
+		fmt.Printf("slowreader: reader SO_RCVBUF left to autotuning, starts at %d\n", granted)
+	}
+	return conn, nil
+}
+```
+
+The sender is a goroutine, and its counters are the three `sync/atomic` fields of a `sender` struct. `conn.Write` is not a single `send()`: it calls `write()` until all 64 KiB are in the send buffer and parks the goroutine on each `EAGAIN` (lesson 0.6), so `send-blocked` measures the whole call, which is what Python's blocking `send()` does in practice:
+
+```go
+func (s *sender) run(listener net.Listener) {
+	conn, err := listener.Accept()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	for {
+		s.sendStarted.Store(time.Now().UnixNano())
+		// Write parks this goroutine while the send buffer is full: the same
+		// wait as Python's blocking send(), on a non-blocking fd plus the netpoller.
+		n, err := conn.Write(chunk)
+		s.noteBlock(s.blockedFor())
+		s.sendStarted.Store(0)
+		s.sent.Add(int64(n))
+		if err != nil {
+			return // the reader closed: EPIPE or ECONNRESET
+		}
+	}
+}
+```
+
+`net.Listen` sets `SO_REUSEADDR` on its own; its backlog is `somaxconn` instead of Python's 1, which changes nothing for a single connection. In the lab the Go port prints the same numbers as Python (`kernel set 8192`, `sent=1769472` at `t=1s`), and `ss -tni` on the sender shows `wscale:0,10`, the proof that the buffer was set before the SYN.
 
 ```
 TICKETING EXAMPLE: the Go port of the api writes the seat map with
@@ -449,7 +511,35 @@ Postgres pool connections.
 
 The Rust port, `demos/00/03/rust/main.rs`, prints the same lines from the same flags. Rust's standard library has no pre-connect hook at all: `TcpStream::connect` does `socket()` and `connect()` together, and `std::net` exposes no receive-buffer setter. The port must create the socket itself, either with the `libc` crate (`socket(AF_INET, SOCK_STREAM, 0)`, `setsockopt(SOL_SOCKET, SO_RCVBUF)`, `getsockopt` to read the granted size, `connect()`) and then wrap the fd with `TcpStream::from_raw_fd`, or with the `socket2` crate's `Socket::set_recv_buffer_size` followed by `connect` and `into()`. Either way it needs a minimal `rust/Cargo.toml`. The sender is a `std::thread` sharing `Arc<AtomicU64>` counters with the reader loop; a blocked `write()` on a blocking `TcpStream` sleeps in the kernel exactly like Python's `send()`.
 
-<!-- PORTER: fill from demos/00/03/rust/main.rs -->
+The reader socket is three libc calls and one conversion. `check()` turns libc's -1 into `io::Error::last_os_error()`, `OwnedFd` closes the socket if any step fails, and `TcpStream::from(sock)` hands the connected fd to std, after which it is an ordinary blocking `TcpStream`:
+
+```rust
+fn connect_reader(port: u16, rcvbuf: libc::c_int) -> io::Result<TcpStream> {
+    let fd = check(unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) })?;
+    let sock = unsafe { OwnedFd::from_raw_fd(fd) }; // closed on drop if anything below fails
+    if rcvbuf > 0 {
+        // Before connect(): the SYN carries the window scale chosen from this buffer,
+        // and setting it also turns off receive-buffer autotuning for this socket.
+        let opt = (&rcvbuf as *const libc::c_int).cast();
+        let len = mem::size_of::<libc::c_int>() as libc::socklen_t;
+        check(unsafe { libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF, opt, len) })?;
+        let granted = rcvbuf_of(&sock)?;
+        println!("slowreader: reader SO_RCVBUF asked {rcvbuf}, kernel set {granted}");
+    } else {
+        let granted = rcvbuf_of(&sock)?;
+        println!("slowreader: reader SO_RCVBUF left to autotuning, starts at {granted}");
+    }
+    let mut addr: libc::sockaddr_in = unsafe { mem::zeroed() };
+    addr.sin_family = libc::AF_INET as libc::sa_family_t;
+    addr.sin_port = port.to_be(); // network byte order
+    addr.sin_addr.s_addr = u32::from(Ipv4Addr::LOCALHOST).to_be();
+    let len = mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+    check(unsafe { libc::connect(fd, (&addr as *const libc::sockaddr_in).cast(), len) })?;
+    Ok(TcpStream::from(sock)) // from here on it is an ordinary blocking std socket
+}
+```
+
+The sender is a `std::thread` sharing an `Arc<Sender>` with the reader loop. Its counters are `AtomicU64`s, and `longest_block` is updated with `fetch_max`, so both threads can fold a block into it without a lock. `conn.write(&CHUNK)` is one `send()` (with `MSG_NOSIGNAL` on Linux) and returns how many bytes the kernel accepted, like Python's `send()`. The listener comes from `TcpListener::bind`, which sets `SO_REUSEADDR` and a backlog of 128; as in Go, the backlog does not matter for one connection. In the lab the Rust port prints the same numbers as the other two (`kernel set 8192`, `sent=1769472` at `t=1s`, `wscale:0,10`).
 
 ```
 TICKETING EXAMPLE: in the Rust port the seat-map response body is written by
@@ -663,6 +753,9 @@ just see 00/03
 | File | Role | Language |
 |------|------|----------|
 | `demos/00/03/python/main.py` | slowreader: sender thread, slow reader with pre-connect `SO_RCVBUF`, per-second accounting | Python |
+| `demos/00/03/go/main.go` | slowreader with a sender goroutine, `sync/atomic` counters and `SO_RCVBUF` set in a `net.Dialer` `Control` hook | Go |
+| `demos/00/03/rust/main.rs` | slowreader with a sender thread, `AtomicU64` counters and a reader socket built with libc, then handed to std | Rust |
+| `demos/00/03/rust/Cargo.toml`, `demos/00/03/rust/Cargo.lock` | The `libc` dependency and the `demo-00-03` binary | TOML |
 | `demos/00/03/run.sh` | `run.sh LANG [--smoke] [ARGS...]`; runs natively on macOS and Linux | Bash |
 | `demos/00/03/see.sh` | Reproducible See It: `tcpdump`, `ss -tni`, `nstat`, port-scoped `tc netem` delay and loss | Bash |
 | `demos/00/03/README.md` | Flags, expected output and what to look for | Markdown |

@@ -486,7 +486,56 @@ the handshake, the request and the response as frames with
 
 The Go port must print the same lines for the same flags (`--iface`, `-n`/`--count`, `--timeout`, `--smoke`) and use the raw syscalls rather than a capture library: `syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(syscall.ETH_P_ALL)))`, `syscall.Bind` with a `*syscall.SockaddrLinklayer` carrying the interface index, and `syscall.Recvfrom`, whose returned `*syscall.SockaddrLinklayer` has the `Pkttype` field the output needs. What differs from Python is mostly byte order: Go has no `socket.htons`, so the port swaps the two bytes of `ETH_P_ALL` itself, and it decodes the header with `encoding/binary.BigEndian`.
 
-<!-- PORTER: fill from demos/00/01/go/main.go -->
+The port is three files. `main.go` starts with `//go:build linux`; `main_other.go` (`//go:build !linux`) prints `sniff: AF_PACKET is Linux-only; run it in the lab: just demo 00/01 go` and exits 2; and a three-line `go.mod` makes the directory a package, because `go build main.go` with an explicit file list ignores build tags while `go build .` honours them. That is what lets `go vet` run on macOS. Opening the tap takes the same three steps as in Python, with errors returned as values instead of raised:
+
+```go
+// openSniffer opens the tap and binds it to one interface.
+func openSniffer(iface string) (fd, ifindex int, err error) {
+	// SOCK_RAW keeps the link-layer header; htons(ETH_P_ALL) asks for every EtherType.
+	fd, err = syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(syscall.ETH_P_ALL)))
+	if err != nil {
+		return -1, 0, err
+	}
+	ifi, err := net.InterfaceByName(iface)
+	if err != nil {
+		syscall.Close(fd)
+		return -1, 0, syscall.ENODEV // what bind() reports for an unknown interface
+	}
+	// CPython's bind() tuple takes the protocol in host order and swaps it for
+	// you; Go copies SockaddrLinklayer into the sockaddr_ll as is, so htons() again.
+	sa := &syscall.SockaddrLinklayer{Protocol: htons(syscall.ETH_P_ALL), Ifindex: ifi.Index}
+	if err := syscall.Bind(fd, sa); err != nil {
+		syscall.Close(fd)
+		return -1, 0, err
+	}
+	return fd, ifi.Index, nil
+}
+```
+
+Two things CPython did implicitly are explicit here. `net.InterfaceByName` turns the name into the index that `syscall.Bind` needs (CPython does that lookup inside `bind()`), and `SockaddrLinklayer.Protocol` is copied into the `sockaddr_ll` unchanged, so it gets `htons()` too. `sniff()` then sorts the error into the same exit codes: `EPERM` or `EACCES` is 3, anything else prints `sniff: cannot bind to 'IFACE': …` and is 2. Go's errno text is lower-case (`no such device`), so a small `strerror()` capitalises it to read like the C library's.
+
+The receive loop sets `SO_RCVTIMEO` (0.5 s) where Python calls `settimeout()`, which CPython implements with `poll()`:
+
+```go
+	for seen < count && time.Now().Before(deadline) {
+		n, from, err := syscall.Recvfrom(fd, buf, 0)
+		if err == syscall.EAGAIN || err == syscall.EINTR {
+			continue // the 0.5 s timeout (or a runtime signal): check the deadline again
+		}
+		if err != nil {
+			fmt.Println("sniff: recvfrom:", strerror(err))
+			return 1
+		}
+		ll, ok := from.(*syscall.SockaddrLinklayer) // the sockaddr_ll the kernel filled in
+		if !ok || n < ethHeaderLen {
+			continue
+		}
+		seen++
+		line, ethertype, dport := describe(buf[:n], ll.Pkttype)
+		fmt.Printf("frame %d: %s\n", seen, line)
+```
+
+`EINTR` is retried along with `EAGAIN`: signal(7) says a receive on a socket with `SO_RCVTIMEO` is never restarted after a signal handler runs, and a Go process has handlers installed for every signal. The type assertion on `from` is where the direction comes from: `syscall.Recvfrom` decodes the `sockaddr_ll` into a `*syscall.SockaddrLinklayer`, and its `Pkttype` field is `sll_pkttype`. In the lab, `just demo 00/01 go --smoke` prints the same two 50-byte frames as the Python demo, `outgoing` then `host`.
 
 ```
 TICKETING EXAMPLE: the Go port of `ticketing rawhttp` (Module 1) is observed
@@ -500,7 +549,56 @@ GET /events on 127.0.0.1:8081 shows the same 0x0800 frames, twice each.
 
 The Rust port must print the same lines for the same flags, through the `libc` crate (a minimal `Cargo.toml` beside `main.rs`): `libc::socket(libc::AF_PACKET, libc::SOCK_RAW, (libc::ETH_P_ALL as u16).to_be() as i32)`, `libc::bind` with a `libc::sockaddr_ll` whose `sll_ifindex` comes from `libc::if_nametoindex`, and `libc::recvfrom` into a buffer plus a `sockaddr_ll` whose `sll_pkttype` gives the direction. What differs from Python is that every call is `unsafe` and returns `-1` with `errno`, so the port wraps each one and turns failures into the same `sniff: …` messages and exit codes (2 for platform or bind errors, 3 for missing `CAP_NET_RAW`).
 
-<!-- PORTER: fill from demos/00/01/rust/main.rs -->
+`rust/Cargo.toml` lists one dependency, `libc` with `default-features = false`. The socket code is marked `#[cfg(target_os = "linux")]`, and a second `sniff()` for every other platform prints the Linux-only message and exits 2, so `cargo clippy` also runs on macOS; the decoders (`describe()`, `describe_ipv4()`, `mac()`) are ordinary portable Rust. Opening the tap:
+
+```rust
+/// Open the tap and bind it to one interface; returns the socket and its ifindex.
+#[cfg(target_os = "linux")]
+fn open_sniffer(iface: &str) -> io::Result<(OwnedFd, u32)> {
+    // SOCK_RAW keeps the link-layer header; htons(ETH_P_ALL) asks for every EtherType.
+    let protocol = (libc::ETH_P_ALL as u16).to_be();
+    let fd = unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW, protocol as i32) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let sock = unsafe { OwnedFd::from_raw_fd(fd) }; // closed on drop, on every path below
+    let name = CString::new(iface).map_err(|_| io::Error::from_raw_os_error(libc::ENODEV))?;
+    let ifindex = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    if ifindex == 0 {
+        return Err(io::Error::last_os_error()); // ENODEV: no such interface
+    }
+    // One interface, not all of them. sll_protocol is in network byte order too.
+    let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
+    addr.sll_family = libc::AF_PACKET as u16;
+    addr.sll_protocol = protocol;
+    addr.sll_ifindex = ifindex as i32;
+    let len = mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t;
+    let ret = unsafe { libc::bind(fd, (&addr as *const libc::sockaddr_ll).cast(), len) };
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((sock, ifindex))
+}
+```
+
+`OwnedFd::from_raw_fd` gives the integer an owner right after `socket()` returns, so every `return Err(…)` below it closes the socket on the way out. `(libc::ETH_P_ALL as u16).to_be()` is `htons()`: `to_be()` does nothing on a big-endian CPU and swaps the bytes on x86-64 and arm64. Errors come back as `io::Error::last_os_error()`; `sniff()` matches `raw_os_error()` against `EPERM` and `EACCES` for exit 3 and uses `libc::strerror` for the message, so it reads `No such device` rather than Rust's `No such device (os error 19)`.
+
+`recvfrom()` writes the frame into the buffer and the `sockaddr_ll` into a struct passed by pointer, and `sll_pkttype` is read straight out of that struct:
+
+```rust
+/// One recvfrom(): the frame's length and the sll_pkttype of the sockaddr_ll beside it.
+#[cfg(target_os = "linux")]
+fn recv_frame(fd: RawFd, buf: &mut [u8]) -> io::Result<(usize, u8)> {
+    let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
+    let mut len = mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t;
+    let from = (&mut addr as *mut libc::sockaddr_ll).cast();
+    let n = unsafe { libc::recvfrom(fd, buf.as_mut_ptr().cast(), buf.len(), 0, from, &mut len) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((n as usize, addr.sll_pkttype))
+}
+```
 
 ```
 TICKETING EXAMPLE: the Rust port of `ticketing rawhttp` answers GET /events
@@ -674,6 +772,10 @@ just see 00/01
 | File | Role | Language |
 |------|------|----------|
 | `demos/00/01/python/main.py` | The `AF_PACKET` sniffer: opens the tap, decodes Ethernet and IPv4 headers, runs the loopback smoke test | Python |
+| `demos/00/01/go/main.go` | The sniffer on the `syscall` package: `AF_PACKET` socket, `SockaddrLinklayer` bind, `Recvfrom` and its `Pkttype` | Go |
+| `demos/00/01/go/main_other.go`, `demos/00/01/go/go.mod` | Non-Linux stub (prints the Linux-only line, exits 2) and the module file that makes `go build .` honour the build tags | Go |
+| `demos/00/01/rust/main.rs` | The sniffer through the `libc` crate: `socket`, `bind` with a `sockaddr_ll`, `recvfrom` and its `sll_pkttype` | Rust |
+| `demos/00/01/rust/Cargo.toml`, `demos/00/01/rust/Cargo.lock` | The `libc` dependency and the `demo-00-01` binary | TOML |
 | `demos/00/01/run.sh` | `run.sh LANG [--smoke] [ARGS...]`; re-runs itself in the lab on macOS, uses `sudo -n` on a Linux host | Bash |
 | `demos/00/01/see.sh` | Reproducible See It: sniffer and `tcpdump` on `lo` and `eth0`, NIC counters, ring size, NAPI limits, IRQ counts, `softnet_stat`, the MTU checks | Bash |
 | `demos/00/01/README.md` | What the demo shows, its flags, what to look for | Markdown |

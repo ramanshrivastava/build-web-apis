@@ -477,7 +477,68 @@ waits for EPOLLOUT when a slow client's send buffer fills during a large
 
 The Go port must show the same two servers with **raw syscalls, not the runtime**. That means `syscall.Socket`, `syscall.Bind`, `syscall.Listen`, `syscall.Accept4`, `syscall.Read`, `syscall.Write` and `syscall.Close` on integer fds, `syscall.SetNonblock` to set `O_NONBLOCK` (which Go implements with `fcntl(F_GETFL)` + `fcntl(F_SETFL)`, a visible contrast with CPython's `ioctl(FIONBIO)` in strace), and `syscall.EpollCreate1`, `syscall.EpollCtl` and `syscall.EpollWait` directly. It must not use `net.Listen`: the whole point of lesson 0.6 is that `net.Listen` already hides an epoll loop (the netpoller), and this lesson is about writing that loop by hand. Same flags (`--mode`, `--port`, `--max-clients`, `--smoke`), same port 9005, same output lines (`accept() = fd 5 from port …`, `read(5) = EAGAIN (drained; back to epoll_wait)`), so `see.sh` and the reader's eye can compare the three.
 
-<!-- PORTER: fill from demos/00/05/go/main.go -->
+The structure is Python's, call for call, on integer fds. Errors are `syscall.Errno` values compared directly (`err == syscall.EAGAIN`) where Python catches `BlockingIOError`; `describe()` formats any other error as `EADDRINUSE (Address already in use)`, from a small name table because the `syscall` package has no `errno.errorcode`. `syscall.EpollEvent` carries the fd in its `Fd` field, which is the 64-bit `data` the kernel hands back. And `EpollWait` can return `EINTR`, which the loop skips: `epoll_wait()` is never restarted after a signal handler, while Python's `epoll.poll()` retries for you (PEP 475). Accepting until `EAGAIN`, and surviving `EMFILE`:
+
+```go
+func acceptAll(lfd, epfd int) error {
+	for {
+		fd, peer, err := syscall.Accept4(lfd, syscall.SOCK_CLOEXEC)
+		if err == syscall.EAGAIN {
+			fmt.Println("accept() = EAGAIN (accept queue empty)")
+			return nil
+		}
+		if err == syscall.EMFILE {
+			// No fd left: the connection stays queued, the listener stays readable,
+			// and level-triggered epoll would wake us again at once. Back off.
+			fmt.Println("accept() = EMFILE (no free fd; the connection stays queued)")
+			// A raw nanosleep, not time.Sleep: the first Go timer starts the
+			// runtime's own netpoller, which needs an epoll fd, and none are left.
+			pause := syscall.NsecToTimespec(int64(time.Second))
+			syscall.Nanosleep(&pause, nil)
+			return nil
+		}
+		if err != nil {
+			return os.NewSyscallError("accept4", err)
+		}
+		if err := syscall.SetNonblock(fd, true); err != nil {
+			return os.NewSyscallError("fcntl", err)
+		}
+		if err := watch(epfd, fd); err != nil {
+			return err
+		}
+		fmt.Printf("accept() = fd %d from port %d, O_NONBLOCK, added to epoll\n", fd, port(peer))
+	}
+}
+```
+
+The `EMFILE` branch shows a cost of the runtime that this lesson otherwise avoids. With `time.Sleep(time.Second)` in that branch, the `ulimit -n 8` run from section 8.5 crashed the Go port with `runtime: epollcreate failed with 24` and `fatal error: runtime: netpollinit failed`: the first Go timer starts the runtime's own netpoller, which needs an epoll fd, and none were left. A raw `syscall.Nanosleep` sleeps without it, and the port then behaves like Python: `accept() = EMFILE` about once a second while `ss -lnt` shows the connections waiting (`LISTEN 2 16`). Reading until `EAGAIN`:
+
+```go
+// echoUntilEagain echoes everything readable on fd; it returns true when the peer has closed.
+func echoUntilEagain(fd int, buf []byte) (bool, error) {
+	for {
+		n, err := syscall.Read(fd, buf)
+		if err == syscall.EAGAIN {
+			fmt.Printf("read(%d) = EAGAIN (drained; back to epoll_wait)\n", fd)
+			return false, nil
+		}
+		if err != nil {
+			return false, os.NewSyscallError("read", err)
+		}
+		fmt.Printf("read(%d) = %d\n", fd, n)
+		if n == 0 {
+			return true, nil
+		}
+		// Small echoes fit the send buffer; lesson 1.5 handles EAGAIN here.
+		if _, err := syscall.Write(fd, buf[:n]); err != nil {
+			return false, os.NewSyscallError("write", err)
+		}
+		fmt.Printf("write(%d) = %d\n", fd, n)
+	}
+}
+```
+
+Run on its own, the epoll server prints the same lines with the same fd numbers as the Python one (`listening fd 3`, `epoll fd 4`, `accept() = fd 5`). Under `--smoke` the numbers shift, because the smoke clients use `net.Dial` in the same process, and `net` starts the netpoller with epoll and eventfd fds of its own.
 
 ```
 TICKETING EXAMPLE: Go's `ticketing rawhttp` in lesson 1.5 never calls
@@ -492,7 +553,77 @@ GODEBUG=schedtrace and the netpoller strace in lesson 0.6 readable.
 
 The Rust port must show the same two servers through the `libc` crate, with a minimal `Cargo.toml` (`libc` as the only dependency): `libc::socket`, `libc::bind`, `libc::listen`, `libc::accept4`, `libc::read`, `libc::write`, `libc::close` and `libc::fcntl` for `O_NONBLOCK`, and `libc::epoll_create1`, `libc::epoll_ctl` and `libc::epoll_wait` for the event loop. It must not use `std::net::TcpListener` or mio: both would hide exactly the calls this lesson is about. Errors come back as `-1` plus `errno` (`std::io::Error::last_os_error()`), and the port should match on `EAGAIN` and `EMFILE` the way the Python demo catches `BlockingIOError` and `OSError`. Same flags, port and output lines as the Python demo.
 
-<!-- PORTER: fill from demos/00/05/rust/main.rs -->
+`check()` and `check_len()` turn libc's -1 into `io::Error::last_os_error()`; the code then matches `e.kind() == io::ErrorKind::WouldBlock` for `EAGAIN` and `e.raw_os_error() == Some(libc::EMFILE)`, the two cases Python catches as `BlockingIOError` and `OSError`. The socket setup, `accept4()` and epoll functions are `#[cfg(target_os = "linux")]`, and a non-Linux `run()` prints the Linux-only line and exits 2. The event loop:
+
+```rust
+fn serve_epoll(lfd: RawFd, max_clients: usize) -> io::Result<()> {
+    let epoll = unsafe { OwnedFd::from_raw_fd(check(libc::epoll_create1(libc::EPOLL_CLOEXEC))?) };
+    let epfd = epoll.as_raw_fd();
+    watch(epfd, lfd)?;
+    let pid = std::process::id();
+    println!(
+        "echo-epoll: pid {pid}, listening fd {lfd} on {}, epoll fd {epfd}",
+        local_port(lfd)
+    );
+    let mut events = [libc::epoll_event { events: 0, u64: 0 }; 64];
+    let mut buf = vec![0u8; 65536];
+    let mut served = 0;
+    while max_clients == 0 || served < max_clients {
+        // epoll_wait(): sleep until some fd is ready (-1: no timeout).
+        let ret =
+            unsafe { libc::epoll_wait(epfd, events.as_mut_ptr(), events.len() as libc::c_int, -1) };
+        let n = match check(ret) {
+            Ok(n) => n as usize,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue, // a signal, not readiness
+            Err(e) => return Err(e),
+        };
+        // Copy the fds out: on x86-64 epoll_event is packed, so its fields cannot be borrowed.
+        let ready: Vec<RawFd> = events[..n].iter().map(|event| event.u64 as RawFd).collect();
+        let names: Vec<String> = ready.iter().map(|fd| format!("fd {fd}")).collect();
+        println!("epoll_wait() = {n} ready: {}", names.join(", "));
+        for fd in ready {
+            if fd == lfd {
+                accept_all(lfd, epfd)?;
+            } else if echo_until_eagain(fd, &mut buf)? {
+                check(unsafe {
+                    libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut())
+                })?;
+                close(fd);
+                println!("close({fd})");
+                served += 1;
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+Two details are Rust-specific. On x86-64, `libc::epoll_event` is `#[repr(packed)]` (the kernel's layout), and Rust refuses to take a reference to a field of a packed struct, so the loop copies each `u64` into a `Vec<RawFd>` before formatting it. And the epoll fd is wrapped in an `OwnedFd`, so it is closed however `serve_epoll` returns, while client fds are closed explicitly with `close()`, because that `close(5)` line is part of what the lesson shows. `thread::sleep` in the `EMFILE` branch is a plain `nanosleep()`, so the Rust port survives `ulimit -n 8` the way Python does.
+
+```rust
+fn accept_all(lfd: RawFd, epfd: RawFd) -> io::Result<()> {
+    loop {
+        let (fd, port) = match accept(lfd) {
+            Ok(accepted) => accepted,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                println!("accept() = EAGAIN (accept queue empty)");
+                return Ok(());
+            }
+            Err(e) if e.raw_os_error() == Some(libc::EMFILE) => {
+                // No fd left: the connection stays queued, the listener stays readable,
+                // and level-triggered epoll would wake us again at once. Back off.
+                println!("accept() = EMFILE (no free fd; the connection stays queued)");
+                thread::sleep(Duration::from_secs(1));
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        set_nonblocking(fd)?;
+        watch(epfd, fd)?;
+        println!("accept() = fd {fd} from port {port}, O_NONBLOCK, added to epoll");
+    }
+}
+```
 
 ```
 TICKETING EXAMPLE: The Rust `ticketing rawhttp` in lesson 1.5 sits on tokio,
@@ -686,6 +817,10 @@ just see 00/05
 | File | Role | Language |
 |------|------|----------|
 | `demos/00/05/python/main.py` | Blocking and raw-epoll echo servers, plus the smoke test | Python |
+| `demos/00/05/go/main.go` | The blocking and raw-epoll servers on the `syscall` package: `Accept4`, `Read`, `Write`, `SetNonblock`, `EpollCreate1`/`EpollCtl`/`EpollWait` | Go |
+| `demos/00/05/go/main_other.go`, `demos/00/05/go/go.mod` | Non-Linux stub (prints the Linux-only line, exits 2) and the module file that makes `go build .` honour the build tags | Go |
+| `demos/00/05/rust/main.rs` | The blocking and raw-epoll servers through the `libc` crate: `accept4`, `read`, `write`, `fcntl`, `epoll_create1`/`epoll_ctl`/`epoll_wait` | Rust |
+| `demos/00/05/rust/Cargo.toml`, `demos/00/05/rust/Cargo.lock` | The `libc` dependency and the `demo-00-05` binary | TOML |
 | `demos/00/05/run.sh` | `run.sh LANG [--smoke] [ARGS...]`; re-runs in the lab on macOS | Bash |
 | `demos/00/05/see.sh` | Reproducible See It: strace of both modes, `ss -lnt`, `/proc/<pid>/fd`, `lsof`, `ulimit -n 8` | Bash |
 | `demos/00/05/README.md` | What the demo shows, its flags and what to look for | Markdown |

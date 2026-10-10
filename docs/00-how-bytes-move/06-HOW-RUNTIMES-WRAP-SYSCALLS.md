@@ -489,7 +489,22 @@ func handle(conn net.Conn, quiet bool, bufSize int) {
 }
 ```
 
-<!-- PORTER: fill from demos/00/06/go/main.go -->
+The rest of the file is plumbing around `handle()`. The banner is printed from `listen()`, before any client connects:
+
+```go
+func listen(port int) net.Listener {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		fmt.Println("echo-goroutines:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("echo-goroutines: pid %d, listening on 127.0.0.1:%d (GOMAXPROCS %d, %d threads)\n",
+		os.Getpid(), port, runtime.GOMAXPROCS(0), pprof.Lookup("threadcreate").Count())
+	return ln
+}
+```
+
+`runtime.GOMAXPROCS(0)` reads the number of Ps without changing it, and `pprof.Lookup("threadcreate").Count()` is the number of OS threads (Ms) the runtime has created so far: about 5 at startup, which the smoke line compares with the count after 50 concurrent clients (`smoke: OK, 50 concurrent clients echoed by 15 threads` in one native macOS run; the number depends on scheduling). Errors are values here as everywhere in Go: a failed `net.Listen` prints `echo-goroutines: listen tcp 127.0.0.1:9006: bind: address already in use` and exits 1, and each smoke client sets a 5-second deadline, so that a broken server fails the smoke instead of hanging until `demo-smoke`'s 60-second cap.
 
 ```
 TICKETING EXAMPLE: the Go port's rawhttp server in lesson 1.5 and its
@@ -527,7 +542,31 @@ async fn handle(mut stream: TcpStream, quiet: bool, buf_size: usize) {
 }
 ```
 
-<!-- PORTER: fill from demos/00/06/rust/main.rs -->
+`#[tokio::main]` turns `main` into a function that builds the multi-thread runtime (one worker per CPU) and blocks on the async body; everything else is tasks. The accept loop moves each `TcpStream` into a task of its own:
+
+```rust
+async fn serve(listener: TcpListener, quiet: bool, buf_size: usize) {
+    while let Ok((stream, _)) = listener.accept().await {
+        tokio::spawn(handle(stream, quiet, buf_size));
+    }
+}
+```
+
+`tokio::spawn` requires a `Send + 'static` future, which is why `handle` takes the stream by value: the task owns its connection, and the compiler rejects any borrow that could outlive it. A read error and EOF both end the loop (`Ok(0) | Err(_) => break`), the Rust counterpart of Go's `if err != nil { break }`. The smoke spawns 50 `one_client` tasks on the same runtime and awaits their `JoinHandle`s, so clients and server handlers share the workers. The worker count comes from `workers()`, which returns `std::thread::available_parallelism()`, the default `#[tokio::main]` uses; a bad flag value (`--port abc`) is a usage error with exit status 2.
+
+```rust
+async fn one_client(port: u16, number: usize) -> bool {
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)).await else {
+        return false;
+    };
+    let message = format!("hello from client {number}\n").into_bytes();
+    if stream.write_all(&message).await.is_err() {
+        return false;
+    }
+    let mut echoed = vec![0u8; message.len()];
+    stream.read_exact(&mut echoed).await.is_ok() && echoed == message
+}
+```
 
 ```
 TICKETING EXAMPLE: axum on hyper on tokio (lesson 2.4) serves GET /events

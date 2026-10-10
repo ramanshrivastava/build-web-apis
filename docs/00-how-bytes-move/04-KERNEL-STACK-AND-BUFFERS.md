@@ -446,7 +446,61 @@ take seconds. Both groups look like "the API is slow" from the browser.
 
 The Go port (`demos/00/04/go/main.go`) must print the same lines for the same flags (`--port`, `--backlog`, `--clients`, `--hold`, `--drain`, `--smoke`) and pass the same smoke assertions. It cannot use `net.Listen`: Go always passes its own backlog, read once from `/proc/sys/net/core/somaxconn` by `maxListenerBacklog()` in net/sock_linux.go (4096 in the lab), so `--backlog 4` would be impossible. The port therefore calls `syscall.Socket`, `syscall.Bind` and `syscall.Listen(fd, backlog)` directly, starts each client with `syscall.SetNonblock` and a `syscall.Connect` that returns `EINPROGRESS`, and decides "connected or pending" with a readiness check such as `poll(2)` plus `SO_ERROR`. What it shows that Python does not: how much the standard library's `net` package chooses for you.
 
-<!-- PORTER: fill from demos/00/04/go/main.go -->
+As in lesson 0.1, the port is `main.go` (`//go:build linux`), a `main_other.go` stub that prints the Linux-only line and exits 2, and a `go.mod` so that the build tags apply. Errors are wrapped with `os.NewSyscallError`, so a failure names the call and the errno together (`neveraccept: bind: address already in use`). The listener is four syscalls, and the second argument of the last one is the point of the lesson:
+
+```go
+func listen(port, backlog int) (int, error) {
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return -1, os.NewSyscallError("socket", err)
+	}
+	// TIME_WAIT sockets from a previous --drain still hold the port; allow rebinding.
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1); err != nil {
+		syscall.Close(fd)
+		return -1, os.NewSyscallError("setsockopt", err)
+	}
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Port: port, Addr: loopback}); err != nil {
+		syscall.Close(fd)
+		return -1, os.NewSyscallError("bind", err)
+	}
+	// The accept queue's limit, exactly as given (capped by net.core.somaxconn).
+	if err := syscall.Listen(fd, backlog); err != nil {
+		syscall.Close(fd)
+		return -1, os.NewSyscallError("listen", err)
+	}
+	return fd, nil
+}
+```
+
+The readiness check needs a call the `syscall` package does not wrap: there is no `syscall.Poll`, and linux/arm64 has no `poll(2)` syscall at all, only `ppoll(2)`, which is what glibc's `poll()` calls there. So the port declares `struct pollfd` itself and makes the call with `syscall.Syscall6`:
+
+```go
+// pollFd is struct pollfd from <poll.h>; the syscall package has no poll wrapper.
+type pollFd struct {
+	fd      int32
+	events  int16
+	revents int16
+}
+
+const pollOut = 0x4 // POLLOUT
+
+// connected reports whether a non-blocking connect has finished: the socket is
+// writable and SO_ERROR is 0. ppoll() with a zero timeout looks without
+// waiting; it is the syscall every libc poll() uses on arm64, which has no poll(2).
+func connected(fd int) bool {
+	pfd := pollFd{fd: int32(fd), events: pollOut}
+	var zero syscall.Timespec
+	ready, _, errno := syscall.Syscall6(syscall.SYS_PPOLL,
+		uintptr(unsafe.Pointer(&pfd)), 1, uintptr(unsafe.Pointer(&zero)), 0, 0, 0)
+	if errno != 0 || ready == 0 {
+		return false
+	}
+	soError, err := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_ERROR)
+	return err == nil && soError == 0
+}
+```
+
+In the lab, `ss -lnt` shows `LISTEN 5 4` for the Go port as it does for Python, and the smoke prints the same `5 connected, 3 pending`. One visible difference: the `drain:` lines show `fd 14` where Python shows `fd 12`. The first `time.Sleep` starts the Go runtime's netpoller, which opens an `eventpoll` and an `eventfd` (fds 12 and 13 in `/proc/<pid>/fd`), even though this program never touches `net`. Lesson 0.6 is about that netpoller.
 
 ```
 TICKETING EXAMPLE: The Go port of `ticketing api` (Module 2, net/http) listens
@@ -462,7 +516,51 @@ and the heap instead, which lesson 0.6 measures.
 
 The Rust port (`demos/00/04/rust/main.rs`, with the `libc` crate) must print the same lines for the same flags. `std::net::TcpListener::bind` hard-codes its backlog: the standard library's socket code (library/std/src/sys/net/connection/socket/mod.rs) calls `listen(fd, 128)` on every platform except two niche targets that cannot take that many. So the port builds the listener itself with `libc::socket`, `libc::bind` and `libc::listen(fd, backlog)`, connects the clients with a non-blocking `libc::connect` that returns `EINPROGRESS`, and checks completion with `libc::poll` and `SO_ERROR`. What it shows that Python does not: the raw `libc` calls behind every `std::net` convenience, and the explicit unsafe boundary around them.
 
-<!-- PORTER: fill from demos/00/04/rust/main.rs -->
+Every libc call goes through `check()`, which turns -1 into `io::Error::last_os_error()`, and every fd is an `OwnedFd`, so the clients and the listener are closed when they are dropped (at the end of `run()`: the clients first, then the listener, as in Python). The listener:
+
+```rust
+fn listen(port: u16, backlog: i32) -> io::Result<OwnedFd> {
+    let listener = tcp_socket()?;
+    let fd = listener.as_raw_fd();
+    // TIME_WAIT sockets from a previous --drain still hold the port; allow rebinding.
+    let one: libc::c_int = 1;
+    let (opt, len) = (
+        (&one as *const libc::c_int).cast(),
+        mem::size_of::<libc::c_int>() as libc::socklen_t,
+    );
+    check(unsafe { libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR, opt, len) })?;
+    let addr = loopback(port);
+    check(unsafe { libc::bind(fd, (&addr as *const libc::sockaddr_in).cast(), ADDR_LEN) })?;
+    // The accept queue's limit, exactly as given (capped by net.core.somaxconn).
+    check(unsafe { libc::listen(fd, backlog) })?;
+    Ok(listener)
+}
+```
+
+`libc::poll` exists on every Unix target (glibc implements it with `ppoll()` on arm64), so the readiness check is a direct translation of Python's `select.poll()`:
+
+```rust
+/// A non-blocking connect has finished when the socket is writable with SO_ERROR 0.
+fn connected(fd: RawFd) -> bool {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    if unsafe { libc::poll(&mut pfd, 1, 0) } <= 0 {
+        return false; // timeout 0: look, do not wait
+    }
+    let (mut so_error, mut len) = (
+        0 as libc::c_int,
+        mem::size_of::<libc::c_int>() as libc::socklen_t,
+    );
+    let out = (&mut so_error as *mut libc::c_int).cast();
+    let ret = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_ERROR, out, &mut len) };
+    ret == 0 && so_error == 0
+}
+```
+
+None of these calls is Linux-specific, so the file also compiles on macOS, and the platform check is a runtime `if !cfg!(target_os = "linux")` in `main()`, in the same place Python tests `sys.platform`. In the lab the drain lines show `fd 12`, as in Python: Rust's std opens no fds of its own.
 
 ```
 TICKETING EXAMPLE: The Rust port of `ticketing api` (Module 2, axum on tokio)
@@ -666,6 +764,10 @@ just see 00/04
 | File | Role | Language |
 |------|------|----------|
 | `demos/00/04/python/main.py` | neveraccept: a `listen(4)` socket that never calls `accept()`, eight non-blocking clients, `--drain` to accept and close server-side first | Python |
+| `demos/00/04/go/main.go` | neveraccept on the `syscall` package: `Listen(fd, backlog)`, non-blocking `Connect`, a hand-made `ppoll()` check, `Accept` for the drain | Go |
+| `demos/00/04/go/main_other.go`, `demos/00/04/go/go.mod` | Non-Linux stub (prints the Linux-only line, exits 2) and the module file that makes `go build .` honour the build tags | Go |
+| `demos/00/04/rust/main.rs` | neveraccept through the `libc` crate: `listen(fd, backlog)`, non-blocking `connect`, `poll` + `SO_ERROR`, `accept` | Rust |
+| `demos/00/04/rust/Cargo.toml`, `demos/00/04/rust/Cargo.lock` | The `libc` dependency and the `demo-00-04` binary | TOML |
 | `demos/00/04/run.sh` | `run.sh LANG [--smoke] [ARGS...]`; re-runs itself in the lab on macOS because the backlog+1 rule is Linux's | Bash |
 | `demos/00/04/see.sh` | Reproducible See It: sysctl, `ss -lnt`/`-tn`/`-tm`/`-tano`, `/proc/net/tcp`, `tcpdump`, `nstat`, the iptables SYN-ACK drop | Bash |
 | `demos/00/04/README.md` | What the demo shows, its flags, what to look for | Markdown |

@@ -502,7 +502,66 @@ one line whether the datagram got an answer, an NXDOMAIN, or nothing.
 
 The Go port, `demos/00/02/go/main.go`, must accept the same arguments (`NAME`, `--type`, `--server`, `--port`, `--tcp`, `--smoke`) and print the same lines in the same format, hex dump included. It packs the header with `encoding/binary.BigEndian`, sends the datagram with a UDP socket from the `net` package (`net.ListenUDP` with `WriteTo`/`ReadFrom`, or `net.Dial("udp", …)` with `Write`/`Read`), and on TC=1 repeats the query with `net.Dial("tcp", …)` and a 2-byte length prefix read back with `io.ReadFull`. What it should point out is how much of this the Go standard library also does for you: the pure-Go resolver in `net/dnsclient_unix.go` builds these same bytes, and lesson 7.2 watches it with `GODEBUG=netdns=go+2`.
 
-<!-- PORTER: fill from demos/00/02/go/main.go -->
+What differs from Python is mostly error handling. Python raises `IndexError` for free when a malformed reply is shorter than a field it reads; a Go slice expression past the end panics instead, so `decodeName()` and `parseResponse()` check every offset against `len(msg)` and return `errShort`. Errors are values all the way up to `run()`, which prints `dns: FAIL, …`; an `os.ErrDeadlineExceeded` from the 3-second `SetDeadline` is reported as `timed out`, as Python reports its `TimeoutError`. Two smaller differences: `flag` stops parsing at the first positional argument, so `main()` parses once more after `NAME` (argparse accepts `example.com --type TXT`), and A and AAAA values are formatted with `netip.AddrFromSlice`, which prints addresses the way `inet_ntop()` does.
+
+The UDP exchange is one `WriteTo` and one `ReadFrom` on an unconnected socket, the `sendto()` and `recvfrom()` of the Python version:
+
+```go
+func askUDP(server string, port int, query []byte) ([]byte, error) {
+	addr, err := net.ResolveUDPAddr("udp4", net.JoinHostPort(server, strconv.Itoa(port)))
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.ListenPacket("udp4", ":0") // unconnected, like Python's socket
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	sent, err := conn.WriteTo(query, addr) // sendto(): one datagram, no connection
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("sendto() %d bytes -> %s:%d (UDP)\n", sent, server, port)
+	reply := make([]byte, 4096)
+	n, peer, err := conn.ReadFrom(reply) // recvfrom(): one whole datagram, or nothing
+	if err != nil {
+		return nil, err
+	}
+	from := peer.(*net.UDPAddr)
+	fmt.Printf("recvfrom() %d bytes <- %s:%d\n", n, from.IP, from.Port)
+	return reply[:n], nil
+}
+```
+
+The TCP fallback reads with `io.ReadFull` twice, first the 2-byte prefix and then exactly that many bytes, where Python loops on `recv()` until the total arrives:
+
+```go
+func askTCP(server string, port int, query []byte) ([]byte, error) {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(server, strconv.Itoa(port)), 3*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	framed := binary.BigEndian.AppendUint16(nil, uint16(len(query))) // TCP is a stream: add a length
+	framed = append(framed, query...)
+	if _, err := conn.Write(framed); err != nil { // Write loops until all is sent, like sendall()
+		return nil, err
+	}
+	fmt.Printf("send() %d bytes -> %s:%d (TCP, 2-byte length + query)\n", len(framed), server, port)
+	prefix := make([]byte, 2)
+	if _, err := io.ReadFull(conn, prefix); err != nil {
+		return nil, closedEarly(err)
+	}
+	reply := make([]byte, binary.BigEndian.Uint16(prefix))
+	if _, err := io.ReadFull(conn, reply); err != nil { // as many reads as it takes
+		return nil, closedEarly(err)
+	}
+	fmt.Printf("recv() %d bytes <- %s:%d (length prefix says %d)\n", 2+len(reply), server, port, len(reply))
+	return reply, nil
+}
+```
 
 ```
 TICKETING EXAMPLE: the Go api (apps/go) resolves `postgres` through net's
@@ -518,7 +577,57 @@ layout as the Python port, with a different ID and source port.
 
 The Rust port, `demos/00/02/rust/main.rs`, must behave identically: same arguments, same output lines, same hex dump format. It uses `std::net::UdpSocket` (`bind("0.0.0.0:0")`, `send_to`, `recv_from` with a read timeout) and `std::net::TcpStream` for the fallback, building the header with `u16::to_be_bytes` and parsing with `u16::from_be_bytes`, std only. What it should point out is ownership of the parse: `decode_name` takes `&[u8]` and an offset and returns an owned `String` plus the next offset, and the compression-loop bound is as necessary in Rust as in Python, because it is a logic bug, not a memory bug.
 
-<!-- PORTER: fill from demos/00/02/rust/main.rs -->
+The file is std only and builds with `rustc --edition 2021 -O main.rs`, without Cargo. Errors are explicit: every parser returns `Result<_, String>`, and slice access goes through `msg.get(range)` with `.ok_or(SHORT)?`, which turns a short reply into an `Err` where Python raises `IndexError` and plain indexing would panic. Socket errors are `io::Error`s, mapped by `io_message()` so that a timeout prints `timed out`. The query id comes from std's `RandomState`, which is seeded from the OS for every process, because std has no random-number API.
+
+```rust
+/// Read a (possibly compressed) name at `offset`. Borrows the message, returns
+/// an owned String plus the offset just after the name where it started.
+fn decode_name(msg: &[u8], mut offset: usize) -> Result<(String, usize), String> {
+    let (mut labels, mut end, mut jumps) = (Vec::new(), None, 0);
+    loop {
+        let length = usize::from(*msg.get(offset).ok_or(SHORT)?);
+        if length & 0xc0 == 0xc0 {
+            // A pointer: the rest of the name lives elsewhere. Bounding the jumps
+            // is not about memory safety; a looping pointer is a logic bug in any language.
+            let low = usize::from(*msg.get(offset + 1).ok_or(SHORT)?);
+            end.get_or_insert(offset + 2);
+            offset = ((length & 0x3f) << 8) | low;
+            jumps += 1;
+            if jumps > 20 {
+                return Err("compression loop".into());
+            }
+            continue;
+        }
+        if length == 0 {
+            let name = if labels.is_empty() {
+                ".".to_string()
+            } else {
+                labels.join(".")
+            };
+            return Ok((name, end.unwrap_or(offset + 1)));
+        }
+        let label = msg.get(offset + 1..offset + 1 + length).ok_or(SHORT)?;
+        labels.push(String::from_utf8_lossy(label).into_owned());
+        offset += 1 + length;
+    }
+}
+```
+
+`end.get_or_insert(offset + 2)` records where the name ended in its original position only on the first jump, exactly like Python's `if end is None`. The UDP side is the std wrapper around the same two syscalls:
+
+```rust
+fn ask_udp(server: &str, port: u16, query: &[u8]) -> io::Result<Vec<u8>> {
+    let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    sock.set_read_timeout(Some(TIMEOUT))?;
+    let sent = sock.send_to(query, (server, port))?; // one datagram, no connection
+    println!("sendto() {sent} bytes -> {server}:{port} (UDP)");
+    let mut reply = vec![0u8; 4096];
+    let (n, peer) = sock.recv_from(&mut reply)?; // one whole datagram, or nothing
+    println!("recvfrom() {n} bytes <- {}:{}", peer.ip(), peer.port());
+    reply.truncate(n);
+    Ok(reply)
+}
+```
 
 ```
 TICKETING EXAMPLE: the Rust api (apps/rust) resolves `postgres` through
@@ -691,6 +800,8 @@ just see 00/02
 | File | Role | Language |
 |------|------|----------|
 | `demos/00/02/python/main.py` | Hand-built DNS client: header and question with `struct`, one `sendto()`/`recvfrom()`, compression-aware parser, TC=1 fallback to TCP | Python |
+| `demos/00/02/go/main.go` | The same DNS client with `encoding/binary`, `ListenPacket` `WriteTo`/`ReadFrom`, bounds-checked parsing and the TCP fallback | Go |
+| `demos/00/02/rust/main.rs` | The same DNS client, std only (`UdpSocket`, `TcpStream`, `to_be_bytes`), built with `rustc` | Rust |
 | `demos/00/02/run.sh` | `run.sh LANG [--smoke] [ARGS...]`; skips `--smoke` when `CI_OFFLINE=1` | Bash |
 | `demos/00/02/see.sh` | Reproducible See It: `ip rule`/`ip route`, ARP in `tcpdump`, `tcpdump -X`, `strace`, DNAT + `conntrack -L`, `dig +trace` | Bash |
 | `demos/00/02/README.md` | How to run the demo and what to look for | Markdown |
