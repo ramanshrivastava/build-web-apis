@@ -1,0 +1,24 @@
+[package]
+name = "ticketing"
+version = "0.0.0"
+edition = "2021"
+description = "Ticketing service, Rust port: the spine app of the Build Web APIs course."
+license = "MIT"
+publish = false
+
+# Library holds every module's code (src/rawhttp, src/api, ...); the binary is
+# a thin subcommand dispatcher over it, so integration tests can use both.
+[lib]
+name = "ticketing"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ticketing"
+path = "src/main.rs"
+
+# Module 1 is std only. Each later module appends its deps under a "# mN"
+# comment; the orchestrator regenerates Cargo.lock at merge time.
+[dependencies]
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

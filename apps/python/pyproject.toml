@@ -1,0 +1,46 @@
+[project]
+name = "ticketing"
+version = "0.0.0"
+description = "Ticketing service, Python port: the spine app of the Build Web APIs course."
+requires-python = ">=3.12"
+license = { text = "MIT" }
+# Module 1 is stdlib only. Each later module appends its deps under a "# mN"
+# comment; the orchestrator regenerates uv.lock at merge time.
+dependencies = []
+
+[project.scripts]
+ticketing = "ticketing.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ticketing"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "RUF", # ruff-specific
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
