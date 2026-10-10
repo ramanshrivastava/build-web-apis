@@ -5,8 +5,9 @@
 // runtime's netpoller (runtime/netpoll_epoll.go) wakes it when epoll says the
 // fd is readable.
 //
-//	go run main.go            # serve on 127.0.0.1:9006
-//	go run main.go --smoke    # 50 concurrent clients, self-checking
+//	go run main.go                   # serve on 127.0.0.1:9006
+//	go run main.go --buf-size 4096   # 4 KiB per-connection buffer
+//	go run main.go --smoke           # 50 concurrent clients, self-checking
 //
 // Minimal version written by the Author so lesson 0.6 can strace it; the
 // Porter refines it against PORT-SPEC.md.
@@ -26,10 +27,10 @@ import (
 
 const smokeClients = 50
 
-func handle(conn net.Conn, quiet bool) {
+func handle(conn net.Conn, quiet bool, bufSize int) {
 	defer conn.Close()
 	port := conn.RemoteAddr().(*net.TCPAddr).Port
-	buf := make([]byte, 65536)
+	buf := make([]byte, bufSize) // allocated per connection, before the first byte arrives
 	echoed := 0
 	for {
 		n, err := conn.Read(buf) // parks this goroutine until the netpoller says readable
@@ -48,13 +49,13 @@ func handle(conn net.Conn, quiet bool) {
 	}
 }
 
-func serve(ln net.Listener, quiet bool) {
+func serve(ln net.Listener, quiet bool, bufSize int) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go handle(conn, quiet)
+		go handle(conn, quiet, bufSize)
 	}
 }
 
@@ -88,7 +89,7 @@ func oneClient(port, number int) bool {
 
 func smoke(port int) int {
 	ln := listen(port)
-	go serve(ln, true)
+	go serve(ln, true, 65536)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	ok := 0
@@ -116,10 +117,11 @@ func smoke(port int) int {
 
 func main() {
 	port := flag.Int("port", 9006, "port to listen on")
+	bufSize := flag.Int("buf-size", 65536, "bytes per read (the per-connection buffer)")
 	smokeFlag := flag.Bool("smoke", false, "50 clients, then exit")
 	flag.Parse()
 	if *smokeFlag {
 		os.Exit(smoke(*port))
 	}
-	serve(listen(*port), false)
+	serve(listen(*port), false, *bufSize)
 }
