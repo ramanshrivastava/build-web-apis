@@ -73,6 +73,9 @@ func hexdump(data []byte) []string {
 func encodeName(name string) []byte {
 	var out []byte
 	for _, label := range strings.Split(strings.TrimRight(name, "."), ".") {
+		if label == "" { // the root name "." has no labels: it is just the final 00
+			continue
+		}
 		out = append(out, byte(len(label)))
 		out = append(out, label...)
 	}
