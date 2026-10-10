@@ -5,8 +5,9 @@
 #
 # 1. the limits: somaxconn, tcp_max_syn_backlog, syncookies
 # 2. neveraccept (backlog 4, 8 clients): ss -lnt shows Recv-Q 5 / Send-Q 4, ss
-#    shows 3 clients in SYN-SENT, tcpdump shows their SYNs retransmitted and
-#    ignored, /proc/net/tcp shows the raw states, nstat counts ListenOverflows
+#    shows 3 clients in SYN-SENT, ss -tm shows the queued connections already own
+#    socket buffers, tcpdump shows the dropped SYNs retransmitted, /proc/net/tcp
+#    shows the raw states, nstat counts ListenOverflows
 # 3. the other queue: drop the server's SYN-ACKs with iptables, so handshakes stay
 #    half-open; ss shows SYN-RECV entries while the accept queue stays empty
 # 4. --drain: accept and close server-side first; ss -o shows TIME-WAIT timers
@@ -42,6 +43,7 @@ start_bg python3 "$demo" --hold 4
 sleep 1.5
 see_run ss -lnt 'sport = :9004'
 see_run ss -tn state syn-sent 'dport = :9004'
+see_sh "ss -tmn state established 'sport = :9004' | head -n 5"
 see_sh "head -n 1 /proc/net/tcp; grep -i ':232C ' /proc/net/tcp | head -n 4"
 wait "$tcpdump_pid" || true
 see_log "\$ tcpdump -i lo -nn 'tcp dst port 9004 and tcp[tcpflags] == tcp-syn'"
