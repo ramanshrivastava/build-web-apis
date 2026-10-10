@@ -5,10 +5,12 @@
 //! (tokio/src/runtime/io/driver.rs, on top of mio's epoll selector) wakes it
 //! when epoll says the fd is readable.
 //!
-//!     cargo run --release -- --smoke    # 50 concurrent clients, self-checking
+//! tokio is built with only `rt-multi-thread`, `net`, `io-util` and `macros`,
+//! so the binary holds the scheduler, the I/O driver and nothing else.
 //!
-//! Minimal version written by the Author so lesson 0.6 can strace it; the
-//! Porter refines it against PORT-SPEC.md.
+//!     cargo run --release                        # serve on 127.0.0.1:9006
+//!     cargo run --release -- --buf-size 4096     # 4 KiB per-connection buffer
+//!     cargo run --release -- --smoke             # 50 concurrent clients, self-checking
 
 use std::process::ExitCode;
 
@@ -37,14 +39,19 @@ async fn handle(mut stream: TcpStream, quiet: bool, buf_size: usize) {
     }
 }
 
+/// The worker count `#[tokio::main]` picks by default: one per available CPU.
+fn workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
 async fn listen(port: u16) -> std::io::Result<TcpListener> {
     let listener = TcpListener::bind(("127.0.0.1", port)).await?;
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
     println!(
-        "echo-tokio: pid {}, listening on 127.0.0.1:{port} (multi-thread runtime, {workers} workers)",
-        std::process::id()
+        "echo-tokio: pid {}, listening on 127.0.0.1:{port} (multi-thread runtime, {} workers)",
+        std::process::id(),
+        workers()
     );
     Ok(listener)
 }
@@ -85,10 +92,8 @@ async fn smoke(port: u16) -> ExitCode {
             ok += 1;
         }
     }
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
     if ok == SMOKE_CLIENTS {
+        let workers = workers();
         println!("smoke: OK, {ok} concurrent clients echoed by {workers} worker threads");
         ExitCode::SUCCESS
     } else {
@@ -109,11 +114,19 @@ async fn main() -> ExitCode {
             "--smoke" => smoke_mode = true,
             "--port" => {
                 i += 1;
-                port = args.get(i).and_then(|p| p.parse().ok()).unwrap_or(port);
+                let Some(value) = args.get(i).and_then(|p| p.parse().ok()) else {
+                    println!("echo-tokio: --port needs a port number");
+                    return ExitCode::from(2);
+                };
+                port = value;
             }
             "--buf-size" => {
                 i += 1;
-                buf_size = args.get(i).and_then(|b| b.parse().ok()).unwrap_or(buf_size);
+                let Some(value) = args.get(i).and_then(|b| b.parse().ok()) else {
+                    println!("echo-tokio: --buf-size needs a byte count");
+                    return ExitCode::from(2);
+                };
+                buf_size = value;
             }
             other => {
                 println!("echo-tokio: unknown argument {other}");
