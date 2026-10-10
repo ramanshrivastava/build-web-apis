@@ -40,6 +40,10 @@ just see 00/01                            # the lesson's See It
 | File | Role |
 |------|------|
 | `python/main.py` | The sniffer (Python, stdlib) |
-| `go/main.go`, `rust/main.rs` | The same program in Go and Rust (see `PORT-SPEC.md`) |
+| `go/main.go` | The sniffer in Go on raw syscalls (`syscall.Socket(AF_PACKET, …)`, `syscall.Recvfrom` into a `SockaddrLinklayer`); Linux-only (`//go:build linux`) |
+| `go/main_other.go` | Non-Linux stub (`//go:build !linux`), so `go build` and `go vet` work on macOS; it prints the Linux-only message and exits 2 |
+| `go/go.mod` | Makes `go/` a module of its own, so `go build .` honours the build tags |
+| `rust/main.rs` | The sniffer in Rust through the `libc` crate (`socket`, `bind`, `recvfrom` into a `sockaddr_ll`) |
+| `rust/Cargo.toml`, `rust/Cargo.lock` | Standalone package `demo-00-01`; one dependency, `libc` |
 | `run.sh` | `run.sh LANG [--smoke] [ARGS...]` |
 | `see.sh` | The lesson's See It: the sniffer, `tcpdump -e`, NIC counters, IRQs, `softnet_stat`, the MTU |

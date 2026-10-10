@@ -71,4 +71,4 @@ expect_match
 
 ## Status
 
-No demos exist yet. Modules 0 and 1 add the first ones; `just demo-smoke` passes trivially until then.
+Module 0's six demos exist, in all three languages: `demos/00/01` (an `AF_PACKET` sniffer) through `demos/00/06` (one echo server on asyncio, goroutines and tokio). `just demo-smoke` runs all of them. Module 1's demos (`demos/01/`) are next.

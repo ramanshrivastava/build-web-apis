@@ -45,6 +45,8 @@ Plain TCP sockets, so the demo runs natively on macOS too (where `SO_RCVBUF` is 
 | File | Role |
 |------|------|
 | `python/main.py` | Sender thread + slow reader (Python, stdlib) |
-| `go/main.go`, `rust/main.rs` | The same program in Go and Rust (see `PORT-SPEC.md`) |
+| `go/main.go` | slowreader in Go: `SO_RCVBUF` set in `net.Dialer.Control` before `connect()` (stdlib) |
+| `rust/main.rs` | slowreader in Rust: the reader socket built with `libc` (`socket`, `setsockopt`, `connect`), then wrapped in a `TcpStream` |
+| `rust/Cargo.toml`, `rust/Cargo.lock` | Standalone package `demo-00-03`; one dependency, `libc` |
 | `run.sh` | `run.sh LANG [--smoke] [ARGS...]` |
 | `see.sh` | The lesson's See It: `tcpdump` (`win 0`), `ss -tni`, `nstat`, `tc netem` delay and loss on port 9003 |

@@ -45,6 +45,10 @@ The `backlog + 1` rule is Linux's (`sk_acceptq_is_full()` in `include/net/sock.h
 | File | Role |
 |------|------|
 | `python/main.py` | Listener + clients (Python, stdlib) |
-| `go/main.go`, `rust/main.rs` | The same program in Go and Rust (see `PORT-SPEC.md`) |
+| `go/main.go` | neveraccept in Go on the `syscall` package, with an explicit `listen(fd, backlog)` (`net.Listen` would use `somaxconn`); Linux-only |
+| `go/main_other.go` | Non-Linux stub (`//go:build !linux`), so `go build` and `go vet` work on macOS; it prints the Linux-only message and exits 2 |
+| `go/go.mod` | Makes `go/` a module of its own, so `go build .` honours the build tags |
+| `rust/main.rs` | neveraccept in Rust through `libc` (`listen`, non-blocking `connect`, `poll`, `accept`) |
+| `rust/Cargo.toml`, `rust/Cargo.lock` | Standalone package `demo-00-04`; one dependency, `libc` |
 | `run.sh` | `run.sh LANG [--smoke] [ARGS...]`; re-runs in the lab on macOS |
 | `see.sh` | The lesson's See It: `ss -lnt`, SYN retransmits in `tcpdump`, `/proc/net/tcp`, `nstat`, half-open handshakes via an iptables rule, `TIME_WAIT` timers |

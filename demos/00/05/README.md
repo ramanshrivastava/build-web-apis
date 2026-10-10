@@ -48,6 +48,10 @@ just see 00/05                                # the lesson's See It
 | File | Role |
 |------|------|
 | `python/main.py` | Both servers and the smoke test (Python, stdlib: `select.epoll`, `os.read`, `os.write`) |
-| `go/main.go`, `rust/main.rs` | The same two servers with raw syscalls in Go (`syscall.EpollWait`) and Rust (`libc::epoll_wait`); see `PORT-SPEC.md` |
+| `go/main.go` | Both servers in Go with raw syscalls (`syscall.Accept4`, `syscall.SetNonblock`, `syscall.EpollWait`), not `net.Listen`; Linux-only |
+| `go/main_other.go` | Non-Linux stub (`//go:build !linux`), so `go build` and `go vet` work on macOS; it prints the Linux-only message and exits 2 |
+| `go/go.mod` | Makes `go/` a module of its own, so `go build .` honours the build tags |
+| `rust/main.rs` | Both servers in Rust through `libc` (`accept4`, `fcntl`, `epoll_wait`), not `std::net` or mio |
+| `rust/Cargo.toml`, `rust/Cargo.lock` | Standalone package `demo-00-05`; one dependency, `libc` |
 | `run.sh` | `run.sh LANG [--smoke] [ARGS...]`; re-runs in the lab on macOS |
 | `see.sh` | The lesson's See It: `strace` of both modes, `ss -lnt`, `/proc/<pid>/fd`, `lsof`, `ulimit -n` exhaustion |

@@ -47,6 +47,7 @@ This is the one Module 0 demo that needs the internet: it asks a real resolver. 
 | File | Role |
 |------|------|
 | `python/main.py` | The DNS client (Python, stdlib) |
-| `go/main.go`, `rust/main.rs` | The same program in Go and Rust (see `PORT-SPEC.md`) |
+| `go/main.go` | The DNS client in Go (stdlib: `net`, `encoding/binary`) |
+| `rust/main.rs` | The DNS client in Rust (std only, built with `rustc`) |
 | `run.sh` | `run.sh LANG [--smoke] [ARGS...]`; skips `--smoke` when `CI_OFFLINE=1` |
 | `see.sh` | The lesson's See It: `ip route get`, ARP, `tcpdump -X`, `strace`, a DNAT rule and `conntrack -L`, `dig +trace` |

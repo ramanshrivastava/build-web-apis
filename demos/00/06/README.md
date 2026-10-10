@@ -45,4 +45,4 @@ All three runtimes are portable (kqueue on macOS, epoll on Linux), so `run.sh` r
 | `run.sh` | `run.sh LANG [--smoke] [ARGS...]` |
 | `see.sh` | The lesson's See It: `strace -f` per runtime, `py-spy dump`, `GODEBUG=schedtrace`, thread names, RSS per idle connection, a GIL probe |
 
-The Go and Rust files here are minimal versions written alongside the lesson so that the See It can trace them; `PORT-SPEC.md` describes what the final ports must print.
+All three ports print the same lines (`PORT-SPEC.md`), and `see.sh` builds and traces the Go and Rust servers alongside the Python one.
