@@ -2,6 +2,8 @@
 # Keep this file compatible with just 1.21 (the lab image's apt version).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
+# Pass recipe arguments as "$@" too, so quoted ARGS survive (just lab bash -c '...').
+set positional-arguments := true
 
 export DATABASE_URL := env_var_or_default("DATABASE_URL", "postgres://postgres:ticketing@localhost:5432/ticketing")
 export REDIS_URL := env_var_or_default("REDIS_URL", "redis://localhost:6379/0")
@@ -22,11 +24,11 @@ down:
 
 # Shell in the Linux lab (tcpdump, strace, ss, perf, wrk, k6), or run ARGS there
 lab *ARGS:
-    docker compose run --rm --build lab {{ARGS}}
+    docker compose run --rm --build lab "$@"
 
 # Apply db/migrations/*.sql in order (add --seed to load db/seed.sql)
 migrate *ARGS:
-    scripts/migrate.sh {{ARGS}}
+    scripts/migrate.sh "$@"
 
 # --- tests ------------------------------------------------------------------
 
@@ -144,7 +146,7 @@ demo-smoke:
 
 # Verify module tags (default: every m* tag): tests pass, subcommands start
 check-tags *TAGS:
-    scripts/check-tags.sh {{TAGS}}
+    scripts/check-tags.sh "$@"
 
 # Everything CI checks, run locally (the fallback when Actions minutes run out)
 ci-local: lint test demo-smoke check-tags

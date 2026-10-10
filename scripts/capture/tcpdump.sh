@@ -19,12 +19,13 @@ while getopts "i:d:o:h" opt; do
 done
 shift $((OPTIND - 1))
 
+command -v tcpdump >/dev/null || { echo "tcpdump not found (run in 'just lab')" >&2; exit 127; }
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 out="${out:-$ROOT/captures/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$out"
 pcap="$out/tcpdump.pcap"
 if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO="sudo"; fi
-command -v tcpdump >/dev/null || { echo "tcpdump not found (run in 'just lab')" >&2; exit 127; }
 
 echo "capture: tcpdump -i $iface for ${duration}s -> $pcap" >&2
 # timeout exits 124 when the capture window ends; that is success here.

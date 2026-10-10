@@ -21,19 +21,24 @@ done
 shift $((OPTIND - 1))
 [ -n "$pid" ] || [ $# -gt 0 ] || { sed -n '2,8p' "$0"; exit 2; }
 
+command -v strace >/dev/null || { echo "strace not found (run in 'just lab')" >&2; exit 127; }
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 out="${out:-$ROOT/captures/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$out"
 log="$out/strace.txt"
 if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO="sudo"; fi
-command -v strace >/dev/null || { echo "strace not found (run in 'just lab')" >&2; exit 127; }
 
+status=0
 if [ -n "$pid" ]; then
   echo "capture: strace -p $pid for ${duration}s -> $log" >&2
-  $SUDO timeout "$duration" strace -f -tt -e "$trace" -o "$log" -p "$pid" || [ $? -eq 124 ]
+  $SUDO timeout "$duration" strace -f -tt -e "$trace" -o "$log" -p "$pid" \
+    || { rc=$?; [ "$rc" -eq 124 ] || status=$rc; } # 124 = capture window ended
 else
   echo "capture: strace $* -> $log" >&2
-  $SUDO strace -f -tt -e "$trace" -o "$log" "$@"
+  # strace exits with the traced command's status; report it after the summary.
+  $SUDO strace -f -tt -e "$trace" -o "$log" "$@" || status=$?
 fi
 echo "--- $(wc -l <"$log") syscalls; top 10 by count:"
-grep -oE '^([0-9]+ +)?[0-9:.]+ [a-z_0-9]+\(' "$log" | grep -oE '[a-z_0-9]+\($' | sort | uniq -c | sort -rn | head -10
+grep -oE '^([0-9]+ +)?[0-9:.]+ [a-z_0-9]+\(' "$log" | grep -oE '[a-z_0-9]+\($' | sort | uniq -c | sort -rn | head -10 || true # an idle process traces nothing
+exit "$status"
