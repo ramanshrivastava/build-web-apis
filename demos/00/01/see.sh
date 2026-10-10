@@ -55,6 +55,8 @@ see_log "## 3. the NIC's counters, ring and interrupts"
 see_run ip -s link show "$iface"
 see_run ethtool -g "$iface"
 see_sh "ethtool -S $iface | grep -E 'drop|miss|kicks' | head -n 6"
+see_run sysctl net.core.netdev_budget net.core.netdev_budget_usecs net.core.netdev_max_backlog
+see_run cat "/sys/class/net/$iface/queues/rx-0/rps_cpus"
 # /proc/interrupts is masked inside Docker containers; /sys/kernel/irq has the same counts.
 dev="$(basename "$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || echo none)")"
 if [ -n "$(head -c 1 /proc/interrupts 2>/dev/null)" ]; then
