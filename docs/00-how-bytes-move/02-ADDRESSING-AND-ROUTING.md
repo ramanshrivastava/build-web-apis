@@ -384,7 +384,8 @@ def encode_name(name: str) -> bytes:
     """example.com -> 07 'example' 03 'com' 00: length-prefixed labels."""
     out = b""
     for label in name.rstrip(".").split("."):
-        out += bytes([len(label)]) + label.encode("ascii")
+        if label:  # the root name "." has no labels: it is just the final 00
+            out += bytes([len(label)]) + label.encode("ascii")
     return out + b"\x00"
 
 
@@ -394,7 +395,7 @@ def build_query(query_id: int, name: str, qtype: int) -> bytes:
     return header + encode_name(name) + struct.pack("!HH", qtype, CLASS_IN)
 ```
 
-`HEADER`, defined at the top of the file as `struct.Struct("!HHHHHH")`, is the 12-byte header: `!` means network byte order (big-endian), and each `H` is an unsigned 16-bit field. `flags = 0x0100` sets only bit 8, RD. `encode_name()` is the label encoding from the table in section 4: each label's length as one byte, then its ASCII bytes, then the zero byte of the root label. Nothing here knows about sockets; a DNS query is a byte string you could write by hand, and the demo prints it in hex so you can compare it with `tcpdump` byte for byte.
+`HEADER`, defined at the top of the file as `struct.Struct("!HHHHHH")`, is the 12-byte header: `!` means network byte order (big-endian), and each `H` is an unsigned 16-bit field. `flags = 0x0100` sets only bit 8, RD. `encode_name()` is the label encoding from the table in section 4: each label's length as one byte, then its ASCII bytes, then the zero byte of the root label. The root itself (`--type NS .`) has no labels, so it encodes as that single `00`. Nothing here knows about sockets; a DNS query is a byte string you could write by hand, and the demo prints it in hex so you can compare it with `tcpdump` byte for byte.
 
 ### Reading names, pointers included
 

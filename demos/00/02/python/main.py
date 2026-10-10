@@ -43,7 +43,8 @@ def encode_name(name: str) -> bytes:
     """example.com -> 07 'example' 03 'com' 00: length-prefixed labels."""
     out = b""
     for label in name.rstrip(".").split("."):
-        out += bytes([len(label)]) + label.encode("ascii")
+        if label:  # the root name "." has no labels: it is just the final 00
+            out += bytes([len(label)]) + label.encode("ascii")
     return out + b"\x00"
 
 
