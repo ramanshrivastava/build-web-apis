@@ -23,7 +23,7 @@ Each module adds one capability to the same ticketing service (events, venues, s
 | [`docs/00-how-bytes-move/04-KERNEL-STACK-AND-BUFFERS.md`](docs/00-how-bytes-move/04-KERNEL-STACK-AND-BUFFERS.md) | `sk_buff`, socket buffers, the SYN queue vs the accept queue, SYN cookies, `TIME_WAIT`, ephemeral ports |
 | [`docs/00-how-bytes-move/05-SOCKET-SYSCALLS.md`](docs/00-how-bytes-move/05-SOCKET-SYSCALLS.md) | socket/bind/listen/accept4/read/write, file descriptors, `O_NONBLOCK` and `EAGAIN`, select/poll/epoll |
 | [`docs/00-how-bytes-move/06-HOW-RUNTIMES-WRAP-SYSCALLS.md`](docs/00-how-bytes-move/06-HOW-RUNTIMES-WRAP-SYSCALLS.md) | CPython's socket module and the GIL, asyncio's selector loop, Go's netpoller, mio and tokio, all over one `epoll_wait()` |
-| [`demos/00/`](demos/00/) | **Live code** — one demo per lesson (sniffer, DNS client, `slowreader`, `neveraccept`, blocking and epoll echo, the echo on three runtimes), each with `run.sh` and a reproducible `see.sh` |
+| [`demos/00/`](demos/00/) | **Live code** — one demo per lesson (sniffer, DNS client, `slowreader`, `neveraccept`, blocking and epoll echo, the echo on three runtimes) in Python, Go and Rust, each with `run.sh` and a reproducible `see.sh` |
 | [`scripts/capture/`](scripts/capture/) | **Live code** — `tcpdump`, `strace` and `ss` capture wrappers used by every See It |
 | [`scripts/see/common.sh`](scripts/see/common.sh) | **Live code** — helpers every `see.sh` uses (`require_tool`, `expect_match`) |
 | [`infra/lab/Dockerfile`](infra/lab/Dockerfile) | **Live code** — the Linux lab: the whole See It palette plus three toolchains |

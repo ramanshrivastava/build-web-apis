@@ -55,12 +55,12 @@ The course asks one question at every layer: **what makes data flow, and what ma
 
 | # | Lesson | What you will see | Status |
 |---|--------|-------------------|--------|
-| 0.1 | [Electrons to Frames](./01-ELECTRONS-TO-FRAMES.md) | One UDP datagram crossing `lo` twice, NIC rings and interrupt counts, `ping -M do` against a 1400-byte MTU | In progress |
-| 0.2 | [Addressing and Routing](./02-ADDRESSING-AND-ROUTING.md) | `ip route get`, an ARP exchange, a 29-byte DNS query in hex, `tc=1` then TCP, a DNAT entry in `conntrack -L` | In progress |
-| 0.3 | [TCP Flow and Congestion](./03-TCP-FLOW-AND-CONGESTION.md) | `win 0` in tcpdump, `rwnd_limited:100%` in `ss -tni`, a 64 KiB window capping throughput at 40 ms RTT | In progress |
-| 0.4 | [Kernel Stack and Buffers](./04-KERNEL-STACK-AND-BUFFERS.md) | `LISTEN 5 4`, SYN retransmits, half-open handshakes in `SYN-RECV`, `TIME-WAIT` timers | In progress |
-| 0.5 | [Socket Syscalls](./05-SOCKET-SYSCALLS.md) | A blocking server's head-of-line wait under `strace -tt`, `read() = -1 EAGAIN`, `EMFILE` at `ulimit -n 8` | In progress |
-| 0.6 | [How Runtimes Wrap Syscalls](./06-HOW-RUNTIMES-WRAP-SYSCALLS.md) | asyncio, Go and tokio all in `epoll_pwait`, `py-spy dump`, thread counts, the cost of an idle connection, the GIL | In progress |
+| 0.1 | [Electrons to Frames](./01-ELECTRONS-TO-FRAMES.md) | One UDP datagram crossing `lo` twice, NIC rings and interrupt counts, `ping -M do` against a 1400-byte MTU | Done |
+| 0.2 | [Addressing and Routing](./02-ADDRESSING-AND-ROUTING.md) | `ip route get`, an ARP exchange, a 29-byte DNS query in hex, `tc=1` then TCP, a DNAT entry in `conntrack -L` | Done |
+| 0.3 | [TCP Flow and Congestion](./03-TCP-FLOW-AND-CONGESTION.md) | `win 0` in tcpdump, `rwnd_limited:100%` in `ss -tni`, a 64 KiB window capping throughput at 40 ms RTT | Done |
+| 0.4 | [Kernel Stack and Buffers](./04-KERNEL-STACK-AND-BUFFERS.md) | `LISTEN 5 4`, SYN retransmits, half-open handshakes in `SYN-RECV`, `TIME-WAIT` timers | Done |
+| 0.5 | [Socket Syscalls](./05-SOCKET-SYSCALLS.md) | A blocking server's head-of-line wait under `strace -tt`, `read() = -1 EAGAIN`, `EMFILE` at `ulimit -n 8` | Done |
+| 0.6 | [How Runtimes Wrap Syscalls](./06-HOW-RUNTIMES-WRAP-SYSCALLS.md) | asyncio, Go and tokio all in `epoll_pwait`, `py-spy dump`, thread counts, the cost of an idle connection, the GIL | Done |
 
 Status moves `Planned` → `In progress` → `Done`. A lesson is `Done` when its Python narrative, See It and all three ports have landed; the Go and Rust sections of each lesson are filled by the Porter from `demos/00/LL/{go,rust}`.
 
@@ -121,6 +121,6 @@ Each lesson takes 45–75 minutes to read and 15–30 minutes to run.
 
 ## Status
 
-All six lessons are written with their Python narrative, Mermaid figures and See It; every `just see 00/LL` passes in the lab. They stay `In progress` until the Go and Rust ports land in `demos/00/LL/{go,rust}` and fill each lesson's `Code: Go` and `Code: Rust` sections (the port contract is `PORT-SPEC.md` at the repo root). Lesson 0.6 already has minimal Go and Rust servers so that its See It can trace all three runtimes. The hero diagram source is [`diagrams/hero.mmd`](./diagrams/hero.mmd), rendered to `hero.svg` and `hero.png`; `hero.excalidraw` is produced with the `/diagram` skill before the lessons move to `Done`.
+All six lessons are `Done`. Each has its Python narrative, Mermaid figures, See It, and filled `Code: Go` and `Code: Rust` sections. All three ports of every demo have landed in `demos/00/LL/{python,go,rust}`, print the same lines (the contract is `PORT-SPEC.md` at the repo root), and pass `just demo 00/LL all --smoke`. Every `just see 00/LL` passes in the lab, and lesson 0.6's See It traces the Go and Rust servers alongside the Python one. The hero diagram is complete: [`diagrams/hero.mmd`](./diagrams/hero.mmd) is the source, rendered to `hero.svg` and `hero.png`, with `hero.excalidraw` as the editable scene.
 
 The module lands as one PR from branch `module/00-how-bytes-move` and is tagged `m0` when the definition of done in [`CONTRIBUTING.md`](../../CONTRIBUTING.md) passes.
