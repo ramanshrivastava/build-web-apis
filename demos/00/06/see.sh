@@ -9,8 +9,9 @@
 # 3. Go: GODEBUG=schedtrace, the OS threads behind the goroutines, and strace
 #    of the netpoller's epoll_pwait + the goroutines' read()/write()
 # 4. Rust: tokio's worker threads by name, and strace of the I/O driver
-# 5. what an idle connection costs: VmRSS before/after 2000 idle connections,
-#    and each runtime's default listen() backlog
+# 5. what an idle connection costs: VmRSS before/after 2000 idle connections
+#    (Go with a 64 KiB and a 4 KiB per-connection buffer), and each runtime's
+#    default listen() backlog
 # 6. the GIL: a thread blocked in recv() lets another thread run; a thread
 #    running Python code does not
 EXPECT='epoll_p?wait\(.*EPOLLIN.*\) = 1'
@@ -104,10 +105,13 @@ see_log "\$ strace -f -e 'trace=/^epoll_p?wait\$,accept4,recvfrom,sendto' $rustb
 see_log "$(sed -n '/accept4(6, {/,$p' "$cap" | grep -v -E 'write\(1,|exited|killed' | head -n 12)"
 
 see_log "## 5. the cost of 2000 idle connections, and each runtime's listen() backlog"
-for lang in python go rust; do
-  case "$lang" in
+# Go runs twice: with the default 64 KiB per-connection buffer and with 4 KiB,
+# which separates the goroutine's own cost from the buffer it is handed.
+for run in python go go-4k rust; do
+  case "$run" in
     python) python3 "$here/python/main.py" >/dev/null & ;;
     go) "$gobin" >/dev/null & ;;
+    go-4k) "$gobin" --buf-size 4096 >/dev/null & ;;
     rust) "$rustbin" >/dev/null & ;;
   esac
   pid=$!
@@ -127,11 +131,11 @@ time.sleep(30)' &
   holder=$!
   deadline=$((SECONDS + 30))
   until [ "$(ss -tnH state established '( sport = :9006 )' | wc -l)" -ge 2000 ] || [ "$SECONDS" -ge "$deadline" ]; do sleep 0.2; done
-  sleep 1
+  sleep 4 # let the allocators settle before sampling VmRSS
   established="$(ss -tnH state established '( sport = :9006 )' | wc -l)"
   after="$(awk '/VmRSS/ {print $2}' "/proc/$pid/status")"
   nthreads="$(awk '/Threads/ {print $2}' "/proc/$pid/status")"
-  see_log "$lang: listen backlog $backlog; $established idle connections: VmRSS $before -> $after kB" \
+  see_log "$run: listen backlog $backlog; $established idle connections: VmRSS $before -> $after kB" \
     "(+$(((after - before) * 1024 / established)) bytes each), $nthreads threads"
   kill "$holder" "$pid" 2>/dev/null || true
   wait "$holder" "$pid" 2>/dev/null || true

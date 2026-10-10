@@ -7,6 +7,7 @@ calling epoll_wait() in BaseEventLoop._run_once(), and every coroutine parked in
 `await reader.read()` is a callback waiting for its fd to become readable.
 
     python3 main.py                 # serve on 127.0.0.1:9006
+    python3 main.py --buf-size 4096 # read in 4 KiB pieces
     python3 main.py --smoke         # 50 concurrent clients, one thread, self-checking
 """
 
@@ -22,10 +23,12 @@ import threading
 SMOKE_CLIENTS = 50
 
 
-async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, quiet: bool) -> None:
+async def handle(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, quiet: bool, buf_size: int
+) -> None:
     port = writer.get_extra_info("peername")[1]
     echoed = 0
-    while data := await reader.read(65536):  # parks this coroutine until the fd is readable
+    while data := await reader.read(buf_size):  # parks this coroutine until the fd is readable
         writer.write(data)  # the transport tries send() at once, buffers what does not fit
         await writer.drain()  # parks again only if that buffer is over its high-water mark
         echoed += len(data)
@@ -35,9 +38,9 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, qui
         print(f"port {port}: echoed {echoed} bytes, closed", flush=True)
 
 
-async def serve(port: int, quiet: bool) -> asyncio.Server:
+async def serve(port: int, quiet: bool, buf_size: int = 65536) -> asyncio.Server:
     server = await asyncio.start_server(
-        lambda r, w: handle(r, w, quiet), host="127.0.0.1", port=port, reuse_address=True
+        lambda r, w: handle(r, w, quiet, buf_size), host="127.0.0.1", port=port, reuse_address=True
     )
     selector = type(asyncio.get_running_loop()._selector).__name__  # EpollSelector on Linux
     print(
@@ -72,8 +75,8 @@ async def smoke(port: int) -> int:
     return 1
 
 
-async def run_forever(port: int) -> None:
-    server = await serve(port, quiet=False)
+async def run_forever(port: int, buf_size: int) -> None:
+    server = await serve(port, quiet=False, buf_size=buf_size)
     async with server:
         await server.serve_forever()
 
@@ -81,12 +84,13 @@ async def run_forever(port: int) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Echo server on asyncio.")
     parser.add_argument("--port", type=int, default=9006)
+    parser.add_argument("--buf-size", type=int, default=65536, help="bytes per read()")
     parser.add_argument("--smoke", action="store_true", help="50 clients, then exit")
     args = parser.parse_args()
     if args.smoke:
         return asyncio.run(smoke(args.port))
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(run_forever(args.port))
+        asyncio.run(run_forever(args.port, args.buf_size))
     return 0
 
 

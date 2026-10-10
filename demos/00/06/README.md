@@ -25,6 +25,7 @@ All three runtimes are portable (kqueue on macOS, epoll on Linux), so `run.sh` r
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--port N` | `9006` | Port to listen on |
+| `--buf-size N` | `65536` | Bytes per read; in Go and Rust also the buffer each connection allocates up front (the See It compares 64 KiB with 4 KiB) |
 | `--smoke` | off | Start the server in-process, run 50 concurrent clients that each send one line and check the echo, exit 0 if all 50 match |
 
 ## What to look for
@@ -32,7 +33,7 @@ All three runtimes are portable (kqueue on macOS, epoll on Linux), so `run.sh` r
 - **asyncio is one thread** (`Threads: 1`). Its loop is `selectors.EpollSelector.select()` called from `BaseEventLoop._run_once()`, which is exactly where `py-spy dump` finds the idle server.
 - **Go reads first and parks second.** `read(4) = -1 EAGAIN`, then the netpoller's `epoll_pwait` returns `EPOLLIN`, then `read(4) = 8`, often on a different OS thread than the first `read()`.
 - **tokio names its threads** `tokio-rt-worker`, one per CPU, and whichever worker is idle runs the I/O driver's `epoll_pwait`.
-- **Defaults differ underneath:** each runtime picks its own `listen()` backlog (asyncio 100, Go `somaxconn`, tokio 128 in this lab), and an idle connection costs a few KB of RSS in each.
+- **Defaults differ underneath:** each runtime picks its own `listen()` backlog (asyncio 100, Go `somaxconn`, tokio 128 in this lab), and an idle connection costs 6–9 KB of RSS in each, except that Go's 64 KiB per-connection buffer becomes resident and dominates (about 59 KB per connection, against 8 KB with `--buf-size 4096`).
 
 ## Files
 
