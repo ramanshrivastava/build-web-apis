@@ -266,30 +266,48 @@ fn value<T: std::str::FromStr>(
         .map_err(|_| format!("bad value for {flag}: {raw}"))
 }
 
-fn main() -> ExitCode {
-    let mut iface = String::from("lo");
-    let mut count: usize = 10;
-    let mut timeout: f64 = 10.0;
-    let mut smoke = false;
+struct Args {
+    iface: String,
+    count: usize,
+    timeout: f64,
+    smoke: bool,
+}
+
+fn parse_args() -> Result<Args, String> {
+    let mut parsed = Args {
+        iface: "lo".into(),
+        count: 10,
+        timeout: 10.0,
+        smoke: false,
+    };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        let parsed = match arg.as_str() {
-            "--smoke" => {
-                smoke = true;
-                Ok(())
-            }
-            "--iface" => value(&mut args, &arg).map(|v| iface = v),
-            "-n" | "--count" => value(&mut args, &arg).map(|v| count = v),
-            "--timeout" => value(&mut args, &arg).map(|v| timeout = v),
-            _ => Err(format!("unknown argument {arg}")),
-        };
-        if let Err(msg) = parsed {
+        match arg.as_str() {
+            "--iface" => parsed.iface = value(&mut args, &arg)?,
+            "-n" | "--count" => parsed.count = value(&mut args, &arg)?,
+            "--timeout" => parsed.timeout = value(&mut args, &arg)?,
+            "--smoke" => parsed.smoke = true,
+            _ => return Err(format!("unexpected argument {arg}")),
+        }
+    }
+    Ok(parsed)
+}
+
+fn main() -> ExitCode {
+    let args = match parse_args() {
+        Ok(args) => args,
+        Err(msg) => {
             eprintln!("sniff: {msg}");
             return ExitCode::from(2);
         }
-    }
-    if smoke {
+    };
+    if args.smoke {
         return sniff("lo", 50, Duration::from_secs(5), true);
     }
-    sniff(&iface, count, Duration::from_secs_f64(timeout), false)
+    sniff(
+        &args.iface,
+        args.count,
+        Duration::from_secs_f64(args.timeout),
+        false,
+    )
 }
