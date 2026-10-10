@@ -1,0 +1,42 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+
+# --- Go ---
+apps/go/bin/
+*.test
+coverage.out
+
+# --- Rust ---
+target/
+
+# --- Node (mermaid-cli, tooling) ---
+node_modules/
+
+# --- Course artifacts ---
+# Codex review/challenge output; summarised in PR bodies, never committed.
+.codex/
+# Packet captures, strace logs, ss snapshots from scripts/capture and see.sh.
+captures/
+# Local TLS material from scripts/certs.sh (keep the directory, not the keys).
+infra/certs/*
+!infra/certs/.gitkeep
+# Per-module worktrees live inside the repo checkout.
+.claude/worktrees/
+
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- OS / editors ---
+.DS_Store
+.idea/
+.vscode/
+*.swp

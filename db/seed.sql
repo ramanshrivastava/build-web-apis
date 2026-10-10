@@ -1,0 +1,5 @@
+-- db/seed.sql: demo data shared by all three ports (Python, Go, Rust).
+--
+-- Applied by `scripts/migrate.sh --seed` after every migration, so it must be
+-- idempotent (INSERT ... ON CONFLICT DO NOTHING). Module 2 adds the first
+-- venues, events and seats here; schema changes belong in db/migrations/.

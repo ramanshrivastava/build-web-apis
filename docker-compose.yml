@@ -1,0 +1,61 @@
+# Shared services for all three ports. `just up` starts postgres + redis;
+# `just lab` runs the Linux lab. Later modules add their own profiles
+# (edge: nginx, observability: prometheus/grafana/jaeger, cluster: replicas).
+name: build-web-apis
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ticketing
+      POSTGRES_DB: ticketing
+    # Every statement and every lock wait lands in `docker compose logs postgres`:
+    # the See It sections for Modules 2, 4 and 7 read them.
+    command:
+      - postgres
+      - -c
+      - log_statement=all
+      - -c
+      - log_lock_waits=on
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ticketing"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # The lab: tcpdump, strace, ss, perf, tshark, wrk, k6 and the three
+  # toolchains (infra/lab/Dockerfile). Host PID and network namespaces let it
+  # observe everything on the Docker host (on macOS: Docker Desktop's VM).
+  # Lessons that need more (perf counters, unshare) add privileges themselves.
+  lab:
+    build: infra/lab
+    image: build-web-apis-lab
+    profiles: [lab]
+    cap_add: [NET_ADMIN, NET_RAW, SYS_PTRACE]
+    pid: host
+    network_mode: host
+    volumes:
+      - .:/work
+    working_dir: /work
+    stdin_open: true
+    tty: true
+    command: bash
+
+volumes:
+  pgdata:
