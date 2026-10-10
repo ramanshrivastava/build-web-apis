@@ -3,7 +3,7 @@
 #
 #   just see 00/02          # needs network: it asks the lab's real resolver
 #
-# 1. ip route get: which interface and source address each destination uses
+# 1. ip rule + ip route get: which table, interface and source address each destination uses
 # 2. ip neigh: the ARP cache; we delete the resolver's entry so the next query must ARP
 # 3. tcpdump -X '(arp and host RESOLVER) or udp port 53' while the demo asks for example.com
 # 4. strace: a big TXT answer comes back with TC=1 over UDP, then again over TCP
@@ -31,6 +31,8 @@ see_sh() { see_log "\$ $1"; see_log "$(bash -c "$1" 2>&1)"; }
 see_log "# kernel $(uname -r), resolver $resolver (from /etc/resolv.conf)"
 
 see_log "## 1. routing decisions"
+see_run ip rule
+see_run ip route show match "$resolver"
 see_run ip route get "$resolver"
 see_run ip route get 1.1.1.1
 resolver_dev="$(ip route get "$resolver" | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)"
