@@ -1,0 +1,16 @@
+[package]
+name = "demo-00-06"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# A standalone package, not part of apps/rust.
+[workspace]
+
+[[bin]]
+name = "demo-00-06"
+path = "main.rs"
+
+[dependencies]
+# Only what an echo server needs: the multi-thread scheduler, TCP, read/write traits.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "io-util", "macros"] }
