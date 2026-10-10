@@ -101,7 +101,12 @@ fn hexdump(data: &[u8]) -> Vec<String> {
 /// example.com -> 07 'example' 03 'com' 00: length-prefixed labels.
 fn encode_name(name: &str) -> Vec<u8> {
     let mut out = Vec::new();
-    for label in name.trim_end_matches('.').split('.') {
+    // The root name "." has no labels: it is just the final 00.
+    for label in name
+        .trim_end_matches('.')
+        .split('.')
+        .filter(|l| !l.is_empty())
+    {
         out.push(label.len() as u8);
         out.extend_from_slice(label.as_bytes());
     }
