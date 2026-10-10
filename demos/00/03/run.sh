@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# demos/00/03/run.sh LANG [--smoke] [ARGS...]: run slowreader in one language.
+#
+#   just demo 00/03 python                               # 4 KiB buffer, 1 KiB every 100 ms
+#   just demo 00/03 python --rcvbuf 65536 --interval 0   # extra args go to the demo
+#   just demo 00/03 all --smoke                          # 3 s; asserts that send() blocked
+#
+# Plain TCP sockets on 127.0.0.1:9003, so it runs natively on macOS and Linux.
+# The See It (tcpdump, ss, tc, nstat) runs in the lab: just see 00/03.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+lang="${1:?usage: run.sh python|go|rust [--smoke] [ARGS...]}"
+shift
+
+skip_unported() { # a port the Porter has not written yet is skipped, loudly
+  echo "run.sh: demos/00/03/$1 not ported yet (see PORT-SPEC.md); skipping $lang"
+  exit 0
+}
+
+bin="${TMPDIR:-/tmp}/demo-00-03-$lang-$$"
+trap 'rm -f "$bin"' EXIT
+case "$lang" in
+  python)
+    python3 "$here/python/main.py" "$@" ;;
+  go)
+    [ -f "$here/go/main.go" ] || skip_unported go/main.go
+    if [ -f "$here/go/go.mod" ]; then (cd "$here/go" && go build -o "$bin" .)
+    else go build -o "$bin" "$here/go/main.go"; fi
+    "$bin" "$@" ;;
+  rust)
+    [ -f "$here/rust/main.rs" ] || skip_unported rust/main.rs
+    if [ -f "$here/rust/Cargo.toml" ]; then
+      cargo build --quiet --release --manifest-path "$here/rust/Cargo.toml"
+      bin="${CARGO_TARGET_DIR:-$here/rust/target}/release/demo-00-03"
+    else
+      rustc --edition 2021 -O "$here/rust/main.rs" -o "$bin"
+    fi
+    "$bin" "$@" ;;
+  *) echo "run.sh: LANG must be python, go or rust" >&2; exit 2 ;;
+esac
