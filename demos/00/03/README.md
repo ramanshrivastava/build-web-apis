@@ -37,7 +37,7 @@ Plain TCP sockets, so the demo runs natively on macOS too (where `SO_RCVBUF` is 
 ## What to look for
 
 - **`send-blocked` keeps growing.** The sender is parked inside `send()` because its send buffer is full, and the send buffer is full because the reader advertised a zero window.
-- **`in-kernel` ≈ the sender's `Send-Q` + the reader's `Recv-Q`** in `ss -tn`: the bytes are not lost, they wait in two kernel buffers.
+- **`in-kernel` is close to the sender's `Send-Q` plus the reader's `Recv-Q`** in `ss -tn`, but only an estimate: it counts completed `send()` calls only, and a segment received but not yet acknowledged sits in both queues at once. Either way the bytes are not lost; they wait in kernel buffers.
 - **With netem delay, a fixed 64 KiB buffer caps throughput** at about window ÷ RTT, however fast the link is. That is the bandwidth-delay product.
 
 ## Files

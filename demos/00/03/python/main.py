@@ -84,7 +84,9 @@ def run(port: int, rcvbuf: int, read_size: int, interval: float, seconds: float)
     while (elapsed := time.monotonic() - started) < seconds:
         read_total += len(reader.recv(read_size))
         if elapsed >= next_report:
-            in_kernel = sender.sent - read_total  # sender's Send-Q + reader's Recv-Q
+            # An estimate of the bytes still in kernel buffers: completed send() calls
+            # minus bytes read (ss's Send-Q + Recv-Q is the kernel's own, overlapping view).
+            in_kernel = sender.sent - read_total
             rate = read_total / elapsed / 1024
             print(
                 f"t={next_report:.0f}s sent={sender.sent} read={read_total} "

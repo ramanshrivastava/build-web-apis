@@ -100,7 +100,7 @@ A connection opens with three segments: SYN, SYN-ACK, ACK (RFC 9293 §3.5). Each
 
 | Option | RFC | What it decides |
 |--------|-----|-----------------|
-| MSS | RFC 9293 §3.7.1 | The largest payload this side is willing to receive in one segment (65483 on loopback, whose MTU is 65536; 1460 on a 1500-byte Ethernet) |
+| MSS | RFC 9293 §3.7.1 | The largest segment payload this side will accept, counted without TCP options. On loopback the SYN advertises `mss 65495` (the largest IPv4 packet, 65535 bytes, minus 20 bytes of IP and 20 of TCP header; lesson 0.4's SYN capture shows it), on a 1500-byte Ethernet `mss 1460`. Options are paid for out of that payload: with the 12-byte timestamp option in every segment, 65483 bytes of data fit on loopback (`advmss:65483` in section 8.2) and 1448 on Ethernet (lesson 0.1's 1448-byte segments) |
 | Window scale | RFC 7323 §2 | A shift count, 0 to 14, applied to every later 16-bit window field. Without it a window can never exceed 65535 bytes |
 | SACK permitted | RFC 2018 | Selective acknowledgments: the receiver can report "I have bytes 10000–20000 but not 5000–10000", so the sender retransmits only the hole |
 | Timestamps | RFC 7323 §3 | Per-segment timestamps for RTT measurement and protection against wrapped sequence numbers (the `TS val … ecr …` in every captured line) |
@@ -209,7 +209,7 @@ Two more rules shape *when* segments and ACKs leave, and both trade latency for 
 
 **Delayed ACKs** (RFC 1122 §4.2.3.2) apply to the receiver: do not ACK every segment at once; wait a little in case there is data to send back that the ACK can ride on, but never longer than 500 ms, and ACK at least every second full-sized segment. Linux starts a connection in "quick ACK" mode (up to `TCP_MAX_QUICKACKS`, 16, immediate ACKs) so that slow start is not throttled, then switches to delaying: `__tcp_ack_snd_check()` in `net/ipv4/tcp_input.c` decides between an immediate ACK and `tcp_send_delayed_ack()`, whose timer runs between 40 ms and 200 ms (`TCP_DELACK_MIN` and `TCP_DELACK_MAX`, `HZ/25` and `HZ/5` in `include/net/tcp.h`) and adapts to the observed traffic pattern (the `ato` field in `ss -i`).
 
-Each rule is reasonable alone. Together they can make both ends wait for a timer, which is the first reality check at the end of this lesson. In this lesson's demo the reader never sends data, so every ACK it emits is a delayed one: section 8.1 shows them leaving about 41 ms after the data they acknowledge.
+Each rule is reasonable alone. Together they can make both ends wait for a timer, which is the first reality check at the end of this lesson. In this lesson's demo the reader never sends data, so an ACK for data it received has nothing to ride on and waits for the delayed-ACK timer: section 8.1 shows the ACK for a 4096-byte segment leaving 40.9 ms after it. Not every segment the reader sends waits, though. A zero-window probe arrives out of the window, and the kernel answers it at once with a duplicate ACK (`tcp_validate_incoming()` → `tcp_send_dupack()` in `net/ipv4/tcp_input.c`): 29 µs later in the same capture. And when the application's reads free enough space to at least double the advertised window, `__tcp_cleanup_rbuf()` (`net/ipv4/tcp.c`) sends the window update immediately. Delayed ACKs delay acknowledgments of data, not every segment a receiver sends.
 
 ```
 TICKETING EXAMPLE: the weekly sales report, GET /reports/sales.csv, streams
@@ -397,7 +397,9 @@ The order of `setsockopt()` and `connect()` is the mechanism, not a style choice
     while (elapsed := time.monotonic() - started) < seconds:
         read_total += len(reader.recv(read_size))
         if elapsed >= next_report:
-            in_kernel = sender.sent - read_total  # sender's Send-Q + reader's Recv-Q
+            # An estimate of the bytes still in kernel buffers: completed send() calls
+            # minus bytes read (ss's Send-Q + Recv-Q is the kernel's own, overlapping view).
+            in_kernel = sender.sent - read_total
             rate = read_total / elapsed / 1024
             print(
                 f"t={next_report:.0f}s sent={sender.sent} read={read_total} "
@@ -410,7 +412,7 @@ The order of `setsockopt()` and `connect()` is the mechanism, not a style choice
             time.sleep(interval)
 ```
 
-`sender.sent - read_total` is the number of bytes the sender's kernel accepted but the reader's application has not yet read. On loopback there is no link to hold bytes "in flight", so they can only be in two places: the sender's write queue (`Send-Q` in `ss`) or the reader's receive queue (`Recv-Q`). The demo cannot see those kernel queues; `ss` can. Section 8.3 checks that the demo's arithmetic and the kernel's counters agree.
+`sender.sent - read_total` estimates the bytes the sender's kernel has accepted and the reader's application has not yet read. It is an estimate from user space, for two reasons. `sender.sent` counts only `send()` calls that have returned, so whatever a still-blocked `send()` has already copied into the kernel is missing from it. And the kernel's own view, the sender's `Send-Q` plus the reader's `Recv-Q` in `ss`, is not a clean partition of those bytes: a segment the reader has received but the sender has not yet seen acknowledged stays in the sender's write queue (it is kept until ACKed, for retransmission) and is also in the reader's receive queue. The demo cannot see those kernel queues; `ss` can. Section 8.3 compares the two, and they should agree in magnitude, not to the byte.
 
 The defaults (`--rcvbuf 4096 --read-size 1024 --interval 0.1`) make the reader consume about 10 KiB/s. The fast-reader runs in section 8.4 use `--read-size 65536 --interval 0`, so the application drains the socket as fast as it can and only TCP's windows limit the flow.
 
@@ -616,7 +618,7 @@ ss -tni '( sport = :9003 or dport = :9003 )'
 ```text
 State Recv-Q Send-Q  Local Address:Port  Peer Address:Port Process
 ESTAB 6144   0           127.0.0.1:56716    127.0.0.1:9003
-	 cubic wscale:10,0 rto:201 rtt:0.033/0.016 ato:141 mss:32768 … rcv_rtt:1 rcv_space:4096 rcv_ssthresh:4096 minrtt:0.033 snd_wnd:65536
+	 cubic wscale:10,0 rto:201 rtt:0.033/0.016 ato:141 mss:32768 pmtu:65535 rcvmss:2048 advmss:65483 … rcv_rtt:1 rcv_space:4096 rcv_ssthresh:4096 minrtt:0.033 snd_wnd:65536
 ESTAB 0      1796096     127.0.0.1:9003     127.0.0.1:56716
 	 cubic wscale:0,10 rto:233 rtt:32.304/14.396 mss:2048 … busy:3220ms rwnd_limited:3220ms(100.0%) unacked:1 retrans:0/2 dsack_dups:2 … notsent:1794048 minrtt:0.014 snd_wnd:2048
 ```
@@ -659,7 +661,7 @@ TcpExtTCPToZeroWindowAdv        10                 0.0
 TcpExtTCPWinProbe               8                  0.0
 ```
 
-The sender's kernel accepted 1,769,472 bytes (27 full 64 KiB chunks) in the first instant, and then one `send()` call slept for the remaining 5.1 seconds: `send-blocked` grows by a second per second while `sent` never moves. The reader got its 10 KiB/s throughout. `in-kernel` at `t=3s`, 1,737,728 bytes, is the same order as `ss`'s Send-Q (1,796,096) plus Recv-Q (6,144) in section 8.2; the two were sampled at different instants by different processes, so they agree in magnitude, not to the byte. Nothing in either output is a drop or an error.
+The sender's kernel accepted 1,769,472 bytes (27 full 64 KiB chunks) in the first instant, and then one `send()` call slept for the remaining 5.1 seconds: `send-blocked` grows by a second per second while `sent` never moves. The reader got its 10 KiB/s throughout. `in-kernel` at `t=3s`, 1,737,728 bytes, is the same order as `ss`'s Send-Q (1,796,096) plus Recv-Q (6,144) in section 8.2, and the gap shows why it is only an estimate: `Send-Q` alone is 26,624 bytes larger than `sent` (1,769,472), because the `send()` call that is still blocked had already copied that much of its 64 KiB chunk into the kernel, and `sent` is updated only when the call returns. The two were also sampled at different instants by different processes. Nothing in either output is a drop or an error.
 
 The counters tell the same story from inside the stack: the reader's socket went to a zero window 10 times (`TCPToZeroWindowAdv`) and back 10 times (`TCPFromZeroWindowAdv`), and the sender sent 8 window probes (`TCPWinProbe`, incremented in `tcp_xmit_probe_skb()`).
 
