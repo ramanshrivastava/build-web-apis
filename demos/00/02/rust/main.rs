@@ -324,19 +324,24 @@ fn resolve(
         println!("{line}");
     }
     let ask = if force_tcp { ask_tcp } else { ask_udp };
-    let (mut header, mut answers) =
-        parse_response(&ask(server, port, &query).map_err(io_message)?)?;
-    if header.id != id {
-        return Err(format!("reply id 0x{:04x} does not match query", header.id));
-    }
-    show(&header, &answers);
+    let (header, answers) = checked_reply(&ask(server, port, &query).map_err(io_message)?, id)?;
     if header.tc == 1 && !force_tcp {
         println!(
             "truncated: the answer did not fit in {UDP_LIMIT} bytes of UDP; retrying over TCP"
         );
-        (header, answers) = parse_response(&ask_tcp(server, port, &query).map_err(io_message)?)?;
-        show(&header, &answers);
+        // The TCP answer gets the same id check as the UDP one.
+        return checked_reply(&ask_tcp(server, port, &query).map_err(io_message)?, id);
     }
+    Ok((header, answers))
+}
+
+/// Parse a reply, and refuse it unless its id says it answers our query.
+fn checked_reply(reply: &[u8], id: u16) -> Result<(Header, Vec<String>), String> {
+    let (header, answers) = parse_response(reply)?;
+    if header.id != id {
+        return Err(format!("reply id 0x{:04x} does not match query", header.id));
+    }
+    show(&header, &answers);
     Ok((header, answers))
 }
 
