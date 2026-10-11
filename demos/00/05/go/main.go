@@ -108,19 +108,9 @@ func serveBlocking(lfd, maxClients int) error {
 			return os.NewSyscallError("accept4", err)
 		}
 		fmt.Printf("accept() = fd %d from port %d\n", fd, port(peer))
-		for {
-			n, err := syscall.Read(fd, buf) // blocks until bytes arrive or the peer closes
-			if err != nil {
-				return os.NewSyscallError("read", err)
-			}
-			fmt.Printf("read(%d) = %d\n", fd, n)
-			if n == 0 {
-				break
-			}
-			if _, err := syscall.Write(fd, buf[:n]); err != nil {
-				return os.NewSyscallError("write", err)
-			}
-			fmt.Printf("write(%d) = %d\n", fd, n)
+		if err := echoBlocking(fd, buf); err != nil {
+			syscall.Close(fd) // never leak the client's fd on the way out
+			return err
 		}
 		syscall.Close(fd)
 		fmt.Printf("close(%d)\n", fd)
@@ -128,11 +118,34 @@ func serveBlocking(lfd, maxClients int) error {
 	return nil
 }
 
-// watch adds fd to the epoll set for EPOLLIN, level-triggered. Fd is the data
-// the kernel hands back with each event, so the loop knows which fd is ready.
-func watch(epfd, fd int) error {
-	event := syscall.EpollEvent{Events: syscall.EPOLLIN, Fd: int32(fd)}
-	return os.NewSyscallError("epoll_ctl", syscall.EpollCtl(epfd, syscall.EPOLL_CTL_ADD, fd, &event))
+// echoBlocking echoes one client until it hangs up.
+func echoBlocking(fd int, buf []byte) error {
+	for {
+		n, err := syscall.Read(fd, buf) // blocks until bytes arrive or the peer closes
+		if err != nil {
+			return os.NewSyscallError("read", err)
+		}
+		fmt.Printf("read(%d) = %d\n", fd, n)
+		if n == 0 {
+			return nil
+		}
+		for sent := 0; sent < n; { // write() may take fewer bytes than asked: send the rest
+			w, err := syscall.Write(fd, buf[sent:n]) // blocks while the send buffer is full
+			if err != nil {
+				return os.NewSyscallError("write", err)
+			}
+			fmt.Printf("write(%d) = %d\n", fd, w)
+			sent += w
+		}
+	}
+}
+
+// interest sets which readiness epoll reports for fd, level-triggered: EPOLLIN to
+// read a client, EPOLLOUT while we still owe it bytes. Fd is the data the kernel
+// hands back with each event, so the loop knows which fd is ready.
+func interest(epfd, op, fd int, events uint32) error {
+	event := syscall.EpollEvent{Events: events, Fd: int32(fd)}
+	return os.NewSyscallError("epoll_ctl", syscall.EpollCtl(epfd, op, fd, &event))
 }
 
 func serveEpoll(lfd, maxClients int) error {
@@ -141,10 +154,17 @@ func serveEpoll(lfd, maxClients int) error {
 		return os.NewSyscallError("epoll_create1", err)
 	}
 	defer syscall.Close(epfd)
-	if err := watch(epfd, lfd); err != nil {
+	if err := interest(epfd, syscall.EPOLL_CTL_ADD, lfd, syscall.EPOLLIN); err != nil {
 		return err
 	}
 	fmt.Printf("echo-epoll: pid %d, listening fd %d on %d, epoll fd %d\n", os.Getpid(), lfd, localPort(lfd), epfd)
+	open := map[int]bool{}      // accepted fds we own, closed when the loop ends
+	pending := map[int][]byte{} // bytes read but not yet written back: the loop owes them
+	defer func() {
+		for fd := range open {
+			syscall.Close(fd)
+		}
+	}()
 	events := make([]syscall.EpollEvent, 64)
 	buf := make([]byte, 65536)
 	for served := 0; maxClients == 0 || served < maxClients; {
@@ -163,17 +183,28 @@ func serveEpoll(lfd, maxClients int) error {
 		for _, event := range events[:n] {
 			fd := int(event.Fd)
 			if fd == lfd {
-				if err := acceptAll(lfd, epfd); err != nil {
+				if err := acceptAll(lfd, epfd, open); err != nil {
 					return err
 				}
 				continue
 			}
-			closed, err := echoUntilEagain(fd, buf)
+			var closed bool
+			if _, owed := pending[fd]; owed { // it watches EPOLLOUT until we have written what we owe
+				closed, err = flushPending(fd, epfd, pending)
+			} else {
+				closed, err = echoUntilEagain(fd, epfd, buf, pending)
+			}
+			if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+				fmt.Printf("fd %d: %s; closing\n", fd, describe(err))
+				closed, err = true, nil
+			}
 			if err != nil {
 				return err
 			}
 			if closed {
 				syscall.EpollCtl(epfd, syscall.EPOLL_CTL_DEL, fd, nil)
+				delete(pending, fd)
+				delete(open, fd)
 				syscall.Close(fd)
 				fmt.Printf("close(%d)\n", fd)
 				served++
@@ -183,7 +214,7 @@ func serveEpoll(lfd, maxClients int) error {
 	return nil
 }
 
-func acceptAll(lfd, epfd int) error {
+func acceptAll(lfd, epfd int, open map[int]bool) error {
 	for {
 		fd, peer, err := syscall.Accept4(lfd, syscall.SOCK_CLOEXEC)
 		if err == syscall.EAGAIN {
@@ -204,17 +235,20 @@ func acceptAll(lfd, epfd int) error {
 			return os.NewSyscallError("accept4", err)
 		}
 		if err := syscall.SetNonblock(fd, true); err != nil {
+			syscall.Close(fd) // never leak an accepted fd we failed to set up
 			return os.NewSyscallError("fcntl", err)
 		}
-		if err := watch(epfd, fd); err != nil {
+		if err := interest(epfd, syscall.EPOLL_CTL_ADD, fd, syscall.EPOLLIN); err != nil {
+			syscall.Close(fd)
 			return err
 		}
+		open[fd] = true
 		fmt.Printf("accept() = fd %d from port %d, O_NONBLOCK, added to epoll\n", fd, port(peer))
 	}
 }
 
 // echoUntilEagain echoes everything readable on fd; it returns true when the peer has closed.
-func echoUntilEagain(fd int, buf []byte) (bool, error) {
+func echoUntilEagain(fd, epfd int, buf []byte, pending map[int][]byte) (bool, error) {
 	for {
 		n, err := syscall.Read(fd, buf)
 		if err == syscall.EAGAIN {
@@ -228,12 +262,54 @@ func echoUntilEagain(fd int, buf []byte) (bool, error) {
 		if n == 0 {
 			return true, nil
 		}
-		// Small echoes fit the send buffer; lesson 1.5 handles EAGAIN here.
-		if _, err := syscall.Write(fd, buf[:n]); err != nil {
-			return false, os.NewSyscallError("write", err)
+		// buf is reused by the next read, so writeOrKeep copies whatever it must keep.
+		if all, err := writeOrKeep(fd, epfd, buf[:n], pending); err != nil || !all {
+			return false, err // the send buffer is full: stop reading until EPOLLOUT
 		}
-		fmt.Printf("write(%d) = %d\n", fd, n)
 	}
+}
+
+// writeOrKeep writes data and keeps what the send buffer refuses in pending[fd];
+// it returns true if all of data went.
+func writeOrKeep(fd, epfd int, data []byte, pending map[int][]byte) (bool, error) {
+	sent, err := syscall.Write(fd, data) // may take only part of data, or nothing (EAGAIN)
+	if err == syscall.EAGAIN {
+		sent = 0
+	} else if err != nil {
+		return false, os.NewSyscallError("write", err)
+	}
+	if sent == len(data) {
+		fmt.Printf("write(%d) = %d\n", fd, sent)
+		return true, nil
+	}
+	pending[fd] = append([]byte(nil), data[sent:]...)
+	// Watch EPOLLOUT instead of EPOLLIN: wake when the send buffer has room, and read
+	// nothing more from this client until it has taken what we already owe it.
+	if err := interest(epfd, syscall.EPOLL_CTL_MOD, fd, syscall.EPOLLOUT); err != nil {
+		return false, err
+	}
+	result := fmt.Sprintf("%d (short write", sent)
+	if sent == 0 {
+		result = "EAGAIN (send buffer full"
+	}
+	fmt.Printf("write(%d) = %s: %d bytes pending, waiting for EPOLLOUT)\n", fd, result, len(pending[fd]))
+	return false, nil
+}
+
+// flushPending runs when EPOLLOUT fires: write what we owe; once it is all gone,
+// read the client again.
+func flushPending(fd, epfd int, pending map[int][]byte) (bool, error) {
+	data := pending[fd]
+	delete(pending, fd)
+	all, err := writeOrKeep(fd, epfd, data, pending)
+	if err != nil || !all {
+		return false, err
+	}
+	if err := interest(epfd, syscall.EPOLL_CTL_MOD, fd, syscall.EPOLLIN); err != nil {
+		return false, err
+	}
+	fmt.Printf("epoll_ctl(MOD, fd %d, EPOLLIN): output drained, reading again\n", fd)
+	return false, nil
 }
 
 // waitEcho reports whether `message` came back within `timeout`. The smoke
