@@ -33,7 +33,7 @@ All three runtimes are portable (kqueue on macOS, epoll on Linux), so `run.sh` r
 - **asyncio is one thread** (`Threads: 1`). Its loop is `selectors.EpollSelector.select()` called from `BaseEventLoop._run_once()`, which is exactly where `py-spy dump` finds the idle server.
 - **Go reads first and parks second.** `read(4) = -1 EAGAIN`, then the netpoller's `epoll_pwait` returns `EPOLLIN`, then `read(4) = 8`, often on a different OS thread than the first `read()`.
 - **tokio names its threads** `tokio-rt-worker`, one per CPU, and whichever worker is idle runs the I/O driver's `epoll_pwait`.
-- **Defaults differ underneath:** each runtime picks its own `listen()` backlog (asyncio 100, Go `somaxconn`, tokio 128 in this lab), and an idle connection costs 6–9 KB of RSS in each, except that Go's 64 KiB per-connection buffer becomes resident and dominates (about 59 KB per connection, against 8 KB with `--buf-size 4096`).
+- **Defaults differ underneath:** each runtime picks its own `listen()` backlog (asyncio 100, Go `somaxconn`, tokio 128 in this lab), and an idle connection costs 6–9 KB of RSS in each, except that Go's 64 KiB per-connection buffer becomes resident and dominates (59 to 66 KB per connection in recent runs, against 8 KB with `--buf-size 4096`).
 
 ## Files
 
