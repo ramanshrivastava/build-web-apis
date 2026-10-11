@@ -20,6 +20,7 @@
 // The fd helpers are portable; socket setup, accept4() and epoll are Linux-only.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::io::{self, Read, Write};
 use std::mem;
@@ -76,10 +77,6 @@ fn read(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
 
 fn write(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
     check_len(unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) })
-}
-
-fn close(fd: RawFd) {
-    unsafe { libc::close(fd) };
 }
 
 /// The errno's name and text, like the Python demo: "EADDRINUSE (Address already in use)".
@@ -143,32 +140,52 @@ fn serve_blocking(lfd: RawFd, max_clients: usize) -> io::Result<()> {
     let mut served = 0;
     while max_clients == 0 || served < max_clients {
         let (fd, port) = accept(lfd)?; // blocks until the accept queue is non-empty
+        let client = unsafe { OwnedFd::from_raw_fd(fd) }; // closed on drop, even if echoing fails
         println!("accept() = fd {fd} from port {port}");
-        loop {
-            let n = read(fd, &mut buf)?; // blocks until bytes arrive or the peer closes
-            println!("read({fd}) = {n}");
-            if n == 0 {
-                break;
-            }
-            write(fd, &buf[..n])?;
-            println!("write({fd}) = {n}");
-        }
-        close(fd);
+        echo_blocking(fd, &mut buf)?;
+        drop(client); // close()
         println!("close({fd})");
         served += 1;
     }
     Ok(())
 }
 
-/// Add fd to the epoll set for EPOLLIN, level-triggered. The u64 is the data the
-/// kernel hands back with each event; storing the fd there says which one is ready.
+/// Echo one client until it hangs up.
+fn echo_blocking(fd: RawFd, buf: &mut [u8]) -> io::Result<()> {
+    loop {
+        let n = read(fd, buf)?; // blocks until bytes arrive or the peer closes
+        println!("read({fd}) = {n}");
+        if n == 0 {
+            return Ok(());
+        }
+        let mut sent = 0;
+        while sent < n {
+            // write() may take fewer bytes than asked: send the rest.
+            let written = write(fd, &buf[sent..n])?; // blocks while the send buffer is full
+            println!("write({fd}) = {written}");
+            sent += written;
+        }
+    }
+}
+
+/// One accepted client: its fd, closed when the Client is dropped, and the bytes
+/// read but not yet written back (the loop owes them).
 #[cfg(target_os = "linux")]
-fn watch(epfd: RawFd, fd: RawFd) -> io::Result<()> {
+struct Client {
+    _fd: OwnedFd,
+    pending: Vec<u8>,
+}
+
+/// Set which readiness epoll reports for fd, level-triggered: EPOLLIN to read a
+/// client, EPOLLOUT while we still owe it bytes. The u64 is the data the kernel
+/// hands back with each event; storing the fd there says which one is ready.
+#[cfg(target_os = "linux")]
+fn interest(epfd: RawFd, op: libc::c_int, fd: RawFd, events: libc::c_int) -> io::Result<()> {
     let mut event = libc::epoll_event {
-        events: libc::EPOLLIN as u32,
+        events: events as u32,
         u64: fd as u64,
     };
-    check(unsafe { libc::epoll_ctl(epfd, libc::EPOLL_CTL_ADD, fd, &mut event) })?;
+    check(unsafe { libc::epoll_ctl(epfd, op, fd, &mut event) })?;
     Ok(())
 }
 
@@ -176,12 +193,14 @@ fn watch(epfd: RawFd, fd: RawFd) -> io::Result<()> {
 fn serve_epoll(lfd: RawFd, max_clients: usize) -> io::Result<()> {
     let epoll = unsafe { OwnedFd::from_raw_fd(check(libc::epoll_create1(libc::EPOLL_CLOEXEC))?) };
     let epfd = epoll.as_raw_fd();
-    watch(epfd, lfd)?;
+    interest(epfd, libc::EPOLL_CTL_ADD, lfd, libc::EPOLLIN)?;
     let pid = std::process::id();
     println!(
         "echo-epoll: pid {pid}, listening fd {lfd} on {}, epoll fd {epfd}",
         local_port(lfd)
     );
+    // Every accepted fd lives in a Client, so returning (or an error) closes them all.
+    let mut clients: HashMap<RawFd, Client> = HashMap::new();
     let mut events = [libc::epoll_event { events: 0, u64: 0 }; 64];
     let mut buf = vec![0u8; 65536];
     let mut served = 0;
@@ -200,12 +219,31 @@ fn serve_epoll(lfd: RawFd, max_clients: usize) -> io::Result<()> {
         println!("epoll_wait() = {n} ready: {}", names.join(", "));
         for fd in ready {
             if fd == lfd {
-                accept_all(lfd, epfd)?;
-            } else if echo_until_eagain(fd, &mut buf)? {
+                accept_all(lfd, epfd, &mut clients)?;
+                continue;
+            }
+            let Some(client) = clients.get_mut(&fd) else {
+                continue;
+            };
+            // A client with pending output watches EPOLLOUT until we have written what we owe.
+            let result = if client.pending.is_empty() {
+                echo_until_eagain(fd, epfd, &mut buf, &mut client.pending)
+            } else {
+                flush_pending(fd, epfd, &mut client.pending)
+            };
+            let closed = match result {
+                Ok(closed) => closed,
+                Err(e) if matches!(e.raw_os_error(), Some(libc::ECONNRESET | libc::EPIPE)) => {
+                    println!("fd {fd}: {}; closing", describe(&e));
+                    true
+                }
+                Err(e) => return Err(e),
+            };
+            if closed {
                 check(unsafe {
                     libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut())
                 })?;
-                close(fd);
+                clients.remove(&fd); // drops the OwnedFd: close()
                 println!("close({fd})");
                 served += 1;
             }
@@ -215,7 +253,7 @@ fn serve_epoll(lfd: RawFd, max_clients: usize) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn accept_all(lfd: RawFd, epfd: RawFd) -> io::Result<()> {
+fn accept_all(lfd: RawFd, epfd: RawFd, clients: &mut HashMap<RawFd, Client>) -> io::Result<()> {
     loop {
         let (fd, port) = match accept(lfd) {
             Ok(accepted) => accepted,
@@ -232,14 +270,27 @@ fn accept_all(lfd: RawFd, epfd: RawFd) -> io::Result<()> {
             }
             Err(e) => return Err(e),
         };
+        // Owned from here on: if a setup step fails, `?` drops it and the fd is closed.
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
         set_nonblocking(fd)?;
-        watch(epfd, fd)?;
+        interest(epfd, libc::EPOLL_CTL_ADD, fd, libc::EPOLLIN)?;
+        let client = Client {
+            _fd: owned,
+            pending: Vec::new(),
+        };
+        clients.insert(fd, client);
         println!("accept() = fd {fd} from port {port}, O_NONBLOCK, added to epoll");
     }
 }
 
 /// Echo everything readable on fd; true when the peer has closed.
-fn echo_until_eagain(fd: RawFd, buf: &mut [u8]) -> io::Result<bool> {
+#[cfg(target_os = "linux")]
+fn echo_until_eagain(
+    fd: RawFd,
+    epfd: RawFd,
+    buf: &mut [u8],
+    pending: &mut Vec<u8>,
+) -> io::Result<bool> {
     loop {
         let n = match read(fd, buf) {
             Ok(n) => n,
@@ -253,9 +304,48 @@ fn echo_until_eagain(fd: RawFd, buf: &mut [u8]) -> io::Result<bool> {
         if n == 0 {
             return Ok(true);
         }
-        write(fd, &buf[..n])?; // small echoes fit the send buffer; lesson 1.5 handles EAGAIN here
-        println!("write({fd}) = {n}");
+        if !write_or_keep(fd, epfd, &buf[..n], pending)? {
+            return Ok(false); // the send buffer is full: stop reading until EPOLLOUT
+        }
     }
+}
+
+/// Write data; keep what the send buffer refuses in `pending`. True if all of it went.
+#[cfg(target_os = "linux")]
+fn write_or_keep(fd: RawFd, epfd: RawFd, data: &[u8], pending: &mut Vec<u8>) -> io::Result<bool> {
+    // write() may take only part of data, or nothing (EAGAIN).
+    let sent = match write(fd, data) {
+        Ok(n) => n,
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => 0,
+        Err(e) => return Err(e),
+    };
+    if sent == data.len() {
+        println!("write({fd}) = {sent}");
+        return Ok(true);
+    }
+    pending.extend_from_slice(&data[sent..]);
+    // Watch EPOLLOUT instead of EPOLLIN: wake when the send buffer has room, and read
+    // nothing more from this client until it has taken what we already owe it.
+    interest(epfd, libc::EPOLL_CTL_MOD, fd, libc::EPOLLOUT)?;
+    let result = if sent > 0 {
+        format!("{sent} (short write")
+    } else {
+        "EAGAIN (send buffer full".to_string()
+    };
+    let owed = pending.len();
+    println!("write({fd}) = {result}: {owed} bytes pending, waiting for EPOLLOUT)");
+    Ok(false)
+}
+
+/// EPOLLOUT fired: write what we owe; once it is all gone, read the client again.
+#[cfg(target_os = "linux")]
+fn flush_pending(fd: RawFd, epfd: RawFd, pending: &mut Vec<u8>) -> io::Result<bool> {
+    let owed = std::mem::take(pending);
+    if write_or_keep(fd, epfd, &owed, pending)? {
+        interest(epfd, libc::EPOLL_CTL_MOD, fd, libc::EPOLLIN)?;
+        println!("epoll_ctl(MOD, fd {fd}, EPOLLIN): output drained, reading again");
+    }
+    Ok(false)
 }
 
 #[cfg(target_os = "linux")]
