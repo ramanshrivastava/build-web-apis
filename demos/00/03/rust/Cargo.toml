@@ -1,0 +1,16 @@
+[package]
+name = "demo-00-03"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# A standalone package, not part of apps/rust.
+[workspace]
+
+[[bin]]
+name = "demo-00-03"
+path = "main.rs"
+
+[dependencies]
+# socket(), setsockopt(SO_RCVBUF) and connect() as three calls: std only offers them as one.
+libc = { version = "0.2", default-features = false }

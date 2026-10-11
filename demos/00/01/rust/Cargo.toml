@@ -1,0 +1,16 @@
+[package]
+name = "demo-00-01"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# A standalone package, not part of apps/rust.
+[workspace]
+
+[[bin]]
+name = "demo-00-01"
+path = "main.rs"
+
+[dependencies]
+# socket(AF_PACKET), sockaddr_ll, if_nametoindex(), recvfrom(): std wraps none of them.
+libc = { version = "0.2", default-features = false }

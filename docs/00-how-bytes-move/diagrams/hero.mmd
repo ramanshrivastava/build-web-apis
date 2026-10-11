@@ -1,0 +1,64 @@
+%% Module 0 hero: a byte's journey from the wire to read().
+%% Left column: where the byte flows (flow). Right column: where it stops (stop).
+%% Rendered to hero.svg / hero.png with mmdc; hero.excalidraw via the /diagram skill.
+flowchart TB
+  subgraph L1["0.1 Electrons to Frames"]
+    wire["signal on the wire: preamble, MACs, EtherType, FCS"]
+    ring["NIC RX ring (DMA descriptors)"]
+    napi["IRQ, then NAPI poll: net_rx_action()"]
+    skb["sk_buff"]
+  end
+  subgraph L2["0.2 Addressing and Routing"]
+    route["ip_rcv(): fib_table_lookup(), nf_conntrack"]
+  end
+  subgraph L3["0.3 TCP Flow and Congestion"]
+    tcp["tcp_v4_rcv(): seq/ack, rcv_wnd, cwnd"]
+  end
+  subgraph L4["0.4 Kernel Stack and Buffers"]
+    queues["SYN queue, accept queue"]
+    rcvq["socket receive queue: sk_receive_queue"]
+  end
+  subgraph L5["0.5 Socket Syscalls"]
+    ready["epoll ready list: ep_poll_callback()"]
+    syscall["epoll_wait(), then read() = n"]
+  end
+  subgraph L6["0.6 How Runtimes Wrap Syscalls"]
+    runtime["asyncio _run_once() / Go netpoll() / tokio Driver::turn()"]
+    handler["your handler: await reader.read(), conn.Read(), stream.read().await"]
+  end
+
+  wire -->|"frame"| ring
+  ring -->|"IRQ"| napi
+  napi -->|"budget 300 / 2 ms"| skb
+  skb -->|"IPv4 packet"| route
+  route -->|"TCP segment"| tcp
+  tcp -->|"SYN, final ACK"| queues
+  tcp -->|"in-order bytes"| rcvq
+  queues -->|"accept4() = fd"| ready
+  rcvq -->|"EPOLLIN"| ready
+  ready --> syscall
+  syscall -->|"bytes copied to user space"| runtime
+  runtime -->|"coroutine, goroutine, task resumed"| handler
+
+  ringfull["ring full: rx_missed_errors"]
+  squeeze["budget spent: time_squeeze, softnet dropped"]
+  mtu["over the route MTU with DF: message too long"]
+  natgone["no route, or the conntrack entry expired"]
+  overflow["accept queue full: SYN dropped, ListenOverflows"]
+  zerowin["receive buffer full: win 0"]
+  eagain["nothing to read: -1 EAGAIN"]
+  parked["loop blocked, GIL held, worker busy"]
+
+  ring -.-> ringfull
+  napi -.-> squeeze
+  route -.-> mtu
+  route -.-> natgone
+  queues -.-> overflow
+  rcvq -.-> zerowin
+  syscall -.-> eagain
+  runtime -.-> parked
+
+  classDef flow fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+  classDef stop fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+  class wire,napi,skb,route,tcp,ready,syscall,runtime,handler flow
+  class ring,queues,rcvq,ringfull,squeeze,mtu,natgone,overflow,zerowin,eagain,parked stop

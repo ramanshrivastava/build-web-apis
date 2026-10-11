@@ -36,21 +36,33 @@ smoke=""
 if [ "${2:-}" = --smoke ]; then smoke="--smoke"; fi
 # Network demos (0.2, 3.6) only:
 # if [ -n "$smoke" ] && [ "${CI_OFFLINE:-0}" = 1 ]; then echo "skip: needs external network"; exit 0; fi
+# rustc writes a temporary binary that the trap deletes. A Cargo build stays in Cargo's
+# target directory: bin points there, and the trap never touches it.
+tmpbin="${TMPDIR:-/tmp}/demo-$$"
+trap 'rm -f "$tmpbin"' EXIT
+bin="$tmpbin"
 case "$lang" in
-  python) exec python3 "$here/python/main.py" ${smoke:+"$smoke"} ;;
-  go)     exec go run "$here/go/main.go" ${smoke:+"$smoke"} ;;
+  python) python3 "$here/python/main.py" ${smoke:+"$smoke"} ;;
+  go)     go run "$here/go/main.go" ${smoke:+"$smoke"} ;;
   rust)
-    bin="${TMPDIR:-/tmp}/demo-$$"
-    rustc --edition 2021 -O "$here/rust/main.rs" -o "$bin"
-    exec "$bin" ${smoke:+"$smoke"} ;;
+    if [ -f "$here/rust/Cargo.toml" ]; then
+      cargo build --quiet --release --manifest-path "$here/rust/Cargo.toml"
+      bin="${CARGO_TARGET_DIR:-$here/rust/target}/release/demo-<mm>-<ll>"
+    else
+      rustc --edition 2021 -O "$here/rust/main.rs" -o "$bin"
+    fi
+    "$bin" ${smoke:+"$smoke"} ;;
   *) echo "run.sh: LANG must be python, go or rust" >&2; exit 2 ;;
 esac
 ```
 
+The Module 0 `run.sh` files are the worked examples: they also pass extra arguments through, build Go modules with build tags (`go/go.mod`), re-run Linux-only demos inside the lab on macOS, and skip `--smoke` for network demos when `CI_OFFLINE=1`.
+
 ## `see.sh`: the reproducible See It
 
 - Declares `EXPECT='<regex>'` near the top. It **exits non-zero if no output line matches**, so a See It that silently stops showing the mechanism fails CI.
-- Sources `scripts/see/common.sh`, which provides `require_tool`, `see_run` (show output and log it), `see_log`, `start_bg` (killed on exit), `wait_port` and `expect_match`, plus `$SUDO` (empty as root in the lab, `sudo` on the CI runner) and `$SEE_ROOT`.
+- Sources `scripts/see/common.sh`, which provides `require_tool`, `see_run` (show output and log it), `see_log`, `start_bg` (runs a command in its own process group and records its pid in `$SEE_BG_PID`), `wait_bg` and `stop_bg` (bounded waits; TERM then KILL to the whole process group, sent through `$SUDO`, until the group is empty), `wait_port` and `expect_match`, plus `$SUDO` (empty as root in the lab, `sudo -n` on the CI runner) and `$SEE_ROOT`. `scripts/see/selftest.sh` checks that the helpers leave no survivors.
+- Starts **every** background process with `start_bg`, including tracers such as `strace`, pipelines (`start_bg bash -c '… | nc …'`) and root-only tools (`start_bg $SUDO timeout 5 tcpdump …`). Root-only observation commands also run under `$SUDO` in the foreground (`see_run $SUDO iptables -S …`), so the same script works as root in the lab and through passwordless sudo on the CI runner. On any exit, `see_cleanup` stops each one and its children with a bounded TERM-then-KILL, so a failing `see.sh` never hangs or leaves a server behind.
 - Replays the lesson's See It commands. The lesson's printed commands and `see.sh` must agree; the Codex challenge pass re-runs both.
 - Runs via `just see <mm>/<ll>`: inside the lab on macOS, directly on Linux (`SEE_IN_LAB=1` forces the lab).
 
@@ -71,4 +83,4 @@ expect_match
 
 ## Status
 
-No demos exist yet. Modules 0 and 1 add the first ones; `just demo-smoke` passes trivially until then.
+Module 0's six demos exist, in all three languages: `demos/00/01` (an `AF_PACKET` sniffer) through `demos/00/06` (one echo server on asyncio, goroutines and tokio). `just demo-smoke` runs all of them. Module 1's demos (`demos/01/`) are next.

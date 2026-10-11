@@ -16,13 +16,14 @@ Each module adds one capability to the same ticketing service (events, venues, s
 
 | Resource | What You'll Learn |
 |----------|-------------------|
-| [`docs/00-how-bytes-move/00-OVERVIEW.md`](docs/00-how-bytes-move/00-OVERVIEW.md) | Module overview, lesson outline, the flow question at the physical layer |
-| `docs/00-how-bytes-move/01-ELECTRONS-TO-FRAMES.md` | *Planned* — signals, NIC, DMA rings, interrupts and NAPI, Ethernet frames, MTU |
-| `docs/00-how-bytes-move/02-ADDRESSING-AND-ROUTING.md` | *Planned* — IP, ARP, routing tables, NAT as state, DNS over UDP by hand |
-| `docs/00-how-bytes-move/03-TCP-FLOW-AND-CONGESTION.md` | *Planned* — handshake, seq/ack, receive window, Nagle and delayed ACK, cwnd, CUBIC and BBR |
-| `docs/00-how-bytes-move/04-KERNEL-STACK-AND-BUFFERS.md` | *Planned* — `sk_buff`, socket buffers, SYN backlog vs accept queue, SYN cookies, TIME_WAIT |
-| `docs/00-how-bytes-move/05-SOCKET-SYSCALLS.md` | *Planned* — socket/bind/listen/accept, file descriptors, `O_NONBLOCK`, select/poll/epoll/kqueue |
-| `docs/00-how-bytes-move/06-HOW-RUNTIMES-WRAP-SYSCALLS.md` | *Planned* — CPython `socketmodule.c` and `selectors`, Go's netpoller, mio and tokio |
+| [`docs/00-how-bytes-move/00-OVERVIEW.md`](docs/00-how-bytes-move/00-OVERVIEW.md) | Module overview, the hero diagram of a byte's journey, the flow question at every layer |
+| [`docs/00-how-bytes-move/01-ELECTRONS-TO-FRAMES.md`](docs/00-how-bytes-move/01-ELECTRONS-TO-FRAMES.md) | Signals, NIC DMA rings, interrupts and NAPI, Ethernet frames, MTU: an `AF_PACKET` sniffer and `ping -M do` |
+| [`docs/00-how-bytes-move/02-ADDRESSING-AND-ROUTING.md`](docs/00-how-bytes-move/02-ADDRESSING-AND-ROUTING.md) | IP, routing tables, ARP, NAT as conntrack state, a DNS query built by hand over UDP (and TCP when TC=1) |
+| [`docs/00-how-bytes-move/03-TCP-FLOW-AND-CONGESTION.md`](docs/00-how-bytes-move/03-TCP-FLOW-AND-CONGESTION.md) | Handshake, seq/ack, the receive window closing to zero, Nagle and delayed ACK, cwnd, CUBIC and BBR, the bandwidth-delay product |
+| [`docs/00-how-bytes-move/04-KERNEL-STACK-AND-BUFFERS.md`](docs/00-how-bytes-move/04-KERNEL-STACK-AND-BUFFERS.md) | `sk_buff`, socket buffers, the SYN queue vs the accept queue, SYN cookies, `TIME_WAIT`, ephemeral ports |
+| [`docs/00-how-bytes-move/05-SOCKET-SYSCALLS.md`](docs/00-how-bytes-move/05-SOCKET-SYSCALLS.md) | socket/bind/listen/accept4/read/write, file descriptors, `O_NONBLOCK` and `EAGAIN`, select/poll/epoll |
+| [`docs/00-how-bytes-move/06-HOW-RUNTIMES-WRAP-SYSCALLS.md`](docs/00-how-bytes-move/06-HOW-RUNTIMES-WRAP-SYSCALLS.md) | CPython's socket module and the GIL, asyncio's selector loop, Go's netpoller, mio and tokio, all over one `epoll_wait()` |
+| [`demos/00/`](demos/00/) | **Live code** — one demo per lesson (sniffer, DNS client, `slowreader`, `neveraccept`, blocking and epoll echo, the echo on three runtimes) in Python, Go and Rust, each with `run.sh` and a reproducible `see.sh` |
 | [`scripts/capture/`](scripts/capture/) | **Live code** — `tcpdump`, `strace` and `ss` capture wrappers used by every See It |
 | [`scripts/see/common.sh`](scripts/see/common.sh) | **Live code** — helpers every `see.sh` uses (`require_tool`, `expect_match`) |
 | [`infra/lab/Dockerfile`](infra/lab/Dockerfile) | **Live code** — the Linux lab: the whole See It palette plus three toolchains |

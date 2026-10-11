@@ -1,0 +1,16 @@
+[package]
+name = "demo-00-04"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# A standalone package, not part of apps/rust.
+[workspace]
+
+[[bin]]
+name = "demo-00-04"
+path = "main.rs"
+
+[dependencies]
+# listen(fd, backlog) with our backlog, non-blocking connect(), poll(): std hides all three.
+libc = { version = "0.2", default-features = false }

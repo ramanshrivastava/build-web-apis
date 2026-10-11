@@ -1,0 +1,16 @@
+[package]
+name = "demo-00-05"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# A standalone package, not part of apps/rust.
+[workspace]
+
+[[bin]]
+name = "demo-00-05"
+path = "main.rs"
+
+[dependencies]
+# socket/bind/listen/accept4/read/write/close/fcntl and epoll_*: the calls themselves, no wrapper.
+libc = { version = "0.2", default-features = false }

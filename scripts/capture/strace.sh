@@ -4,22 +4,24 @@
 #   scripts/capture/strace.sh [-e TRACE] [-o DIR] -p PID [-d SECONDS]
 #   scripts/capture/strace.sh [-e TRACE] [-o DIR] -- CMD [ARGS...]
 #
-# Default TRACE: trace=network,desc,epoll_wait (the course's standard view).
+# Default TRACE: trace=network,desc,epoll_wait,epoll_pwait (the course's standard
+# view). arm64 has no epoll_wait syscall: libc implements epoll_wait() with
+# epoll_pwait, so on Apple Silicon labs only epoll_pwait lines appear.
 # Writes DIR/strace.txt (default captures/<timestamp>/) and prints a summary.
 set -euo pipefail
 
-trace="trace=network,desc,epoll_wait" out="" pid="" duration=10
+trace="trace=network,desc,epoll_wait,epoll_pwait" out="" pid="" duration=10
 while getopts "e:o:p:d:h" opt; do
   case "$opt" in
     e) trace="$OPTARG" ;;
     o) out="$OPTARG" ;;
     p) pid="$OPTARG" ;;
     d) duration="$OPTARG" ;;
-    *) sed -n '2,8p' "$0"; exit 2 ;;
+    *) sed -n '2,10p' "$0"; exit 2 ;;
   esac
 done
 shift $((OPTIND - 1))
-[ -n "$pid" ] || [ $# -gt 0 ] || { sed -n '2,8p' "$0"; exit 2; }
+[ -n "$pid" ] || [ $# -gt 0 ] || { sed -n '2,10p' "$0"; exit 2; }
 
 command -v strace >/dev/null || { echo "strace not found (run in 'just lab')" >&2; exit 127; }
 
