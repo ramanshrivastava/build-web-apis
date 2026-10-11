@@ -17,8 +17,11 @@ skip_unported() { # a port the Porter has not written yet is skipped, loudly
   exit 0
 }
 
-bin="${TMPDIR:-/tmp}/demo-00-03-$lang-$$"
-trap 'rm -f "$bin"' EXIT
+# go build and rustc write a temporary binary that the trap deletes. A Cargo build
+# stays in Cargo's target directory: bin points there, and the trap never touches it.
+tmpbin="${TMPDIR:-/tmp}/demo-00-03-$lang-$$"
+trap 'rm -f "$tmpbin"' EXIT
+bin="$tmpbin"
 case "$lang" in
   python)
     python3 "$here/python/main.py" "$@" ;;
