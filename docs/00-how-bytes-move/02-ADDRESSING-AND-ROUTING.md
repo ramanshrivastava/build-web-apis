@@ -459,19 +459,25 @@ The same query bytes, framed. TCP delivers a stream, so the receiver needs to kn
 ### The fallback
 
 ```python
-    reply = ask_tcp(server, port, query) if force_tcp else ask_udp(server, port, query)
+def checked_reply(reply: bytes, query_id: int) -> tuple[dict[str, int], list[str]]:
+    """Parse a reply, and refuse it unless its id says it answers our query."""
     header, answers = parse_response(reply)
     if header["id"] != query_id:
         raise ValueError(f"reply id 0x{header['id']:04x} does not match query")
     show(header, answers)
-    if header["tc"] and not force_tcp:
-        print(f"truncated: the answer did not fit in {UDP_LIMIT} bytes of UDP; retrying over TCP")
-        header, answers = parse_response(ask_tcp(server, port, query))
-        show(header, answers)
     return header, answers
 ```
 
-Two checks every real resolver makes. The **ID check** is the only thing tying an answer to its question over UDP (with a random source port, it is also the main defense against forged answers). The **TC check** is the reality check of this lesson: a truncated answer must never be used as if it were complete, even when, as in the lab, it already contains some of the records.
+```python
+    reply = ask_tcp(server, port, query) if force_tcp else ask_udp(server, port, query)
+    header, answers = checked_reply(reply, query_id)
+    if header["tc"] and not force_tcp:
+        print(f"truncated: the answer did not fit in {UDP_LIMIT} bytes of UDP; retrying over TCP")
+        header, answers = checked_reply(ask_tcp(server, port, query), query_id)  # same check
+    return header, answers
+```
+
+Two checks every real resolver makes. The **ID check** is the only thing tying an answer to its question over UDP (with a random source port, it is also the main defense against forged answers), and it applies to the TCP retry too: `checked_reply()` is the one path every answer goes through, so a TCP answer with the wrong ID ends the lookup with `dns: FAIL, reply id … does not match query` instead of being used. The **TC check** is the reality check of this lesson: a truncated answer must never be used as if it were complete, even when, as in the lab, it already contains some of the records.
 
 The parsed reply for an A query looks like this (captured in the lab, section 8.3):
 

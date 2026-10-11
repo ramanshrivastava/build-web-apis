@@ -164,6 +164,15 @@ def show(header: dict[str, int], answers: list[str]) -> None:
         print(f"answer: {answer}")
 
 
+def checked_reply(reply: bytes, query_id: int) -> tuple[dict[str, int], list[str]]:
+    """Parse a reply, and refuse it unless its id says it answers our query."""
+    header, answers = parse_response(reply)
+    if header["id"] != query_id:
+        raise ValueError(f"reply id 0x{header['id']:04x} does not match query")
+    show(header, answers)
+    return header, answers
+
+
 def resolve(name: str, qtype: str, server: str, port: int, force_tcp: bool) -> tuple[dict, list]:
     query_id = random.getrandbits(16)
     query = build_query(query_id, name, TYPES[qtype])
@@ -171,14 +180,10 @@ def resolve(name: str, qtype: str, server: str, port: int, force_tcp: bool) -> t
     for line in hexdump(query):
         print(line)
     reply = ask_tcp(server, port, query) if force_tcp else ask_udp(server, port, query)
-    header, answers = parse_response(reply)
-    if header["id"] != query_id:
-        raise ValueError(f"reply id 0x{header['id']:04x} does not match query")
-    show(header, answers)
+    header, answers = checked_reply(reply, query_id)
     if header["tc"] and not force_tcp:
         print(f"truncated: the answer did not fit in {UDP_LIMIT} bytes of UDP; retrying over TCP")
-        header, answers = parse_response(ask_tcp(server, port, query))
-        show(header, answers)
+        header, answers = checked_reply(ask_tcp(server, port, query), query_id)  # same check
     return header, answers
 
 
