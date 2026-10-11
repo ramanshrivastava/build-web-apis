@@ -141,7 +141,9 @@ func run(port, rcvbuf, readSize int, interval, seconds float64) (*sender, error)
 		readTotal += n
 		if elapsed >= nextReport {
 			sent := int(s.sent.Load())
-			inKernel := sent - readTotal // sender's Send-Q + reader's Recv-Q
+			// An estimate of the bytes still in kernel buffers: completed Write calls
+			// minus bytes read (ss's Send-Q + Recv-Q is the kernel's own, overlapping view).
+			inKernel := sent - readTotal
 			rate := float64(readTotal) / elapsed / 1024
 			blocked := float64(s.blockedFor()) / float64(time.Millisecond)
 			fmt.Printf("t=%.0fs sent=%d read=%d in-kernel=%d read-rate=%.1f KiB/s send-blocked=%.0fms\n",
