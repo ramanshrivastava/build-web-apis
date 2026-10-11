@@ -17,6 +17,7 @@
 #
 # Every server, tracer and connection holder starts with start_bg, so cleanup
 # stops all of them (and strace's tracees) on any exit path.
+# shellcheck disable=SC2086  # $SUDO ("" or "sudo -n") is split into words on purpose
 EXPECT='epoll_p?wait\(.*EPOLLIN.*\) = 1'
 source "$(cd "$(dirname "$0")/../../.." && pwd)/scripts/see/common.sh"
 require_tool strace ss py-spy nc python3 go cargo
@@ -68,7 +69,7 @@ start_bg python3 "$here/python/main.py" >/dev/null
 pid=$SEE_BG_PID
 wait_listen
 sleep 0.5
-see_run py-spy dump --pid "$pid"
+see_run $SUDO py-spy dump --pid "$pid"
 stop_bg "$pid"
 
 see_log "## 3. Go: goroutines on a few threads, one netpoller"
@@ -109,7 +110,7 @@ see_log "$(sed -n '/accept4(6/,$p' "$cap" | grep -v -E 'write\(1,|exited|killed'
 
 see_log "## 5. the cost of 2000 idle connections, and each runtime's listen() backlog"
 # Go runs twice: with the default 64 KiB per-connection buffer and with 4 KiB,
-# which separates the goroutine's own cost from the buffer it is handed.
+# which shows how much of the per-connection cost is the buffer each handler allocates.
 established() { ss -tnH state established '( sport = :9006 )' | wc -l; }
 for run in python go go-4k rust; do
   case "$run" in

@@ -10,7 +10,8 @@
 #
 # The dummy NIC (m0mtu, 198.51.100.254/24 from TEST-NET-2, RFC 5737) carries no
 # real traffic and is deleted on exit.
-# shellcheck disable=SC1010  # "ping -M do" is a ping flag, not a loop keyword
+# shellcheck disable=SC1010,SC2086  # "ping -M do" is a ping flag, not a loop keyword;
+# $SUDO ("" or "sudo -n") is split into words on purpose.
 EXPECT='message too long, mtu=1400'
 source "$(cd "$(dirname "$0")/../../.." && pwd)/scripts/see/common.sh"
 require_tool ip ethtool tcpdump ping python3 awk

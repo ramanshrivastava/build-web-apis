@@ -13,6 +13,7 @@
 # 4. --drain: accept and close server-side first; ss -o shows TIME-WAIT timers
 #
 # The iptables rule matches only SYN-ACKs from port 9004 and is removed on exit.
+# shellcheck disable=SC2086  # $SUDO ("" or "sudo -n") is split into words on purpose
 EXPECT='^LISTEN +5 +4 '
 source "$(cd "$(dirname "$0")/../../.." && pwd)/scripts/see/common.sh"
 require_tool ss nstat tcpdump iptables python3

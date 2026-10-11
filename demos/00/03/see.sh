@@ -37,7 +37,8 @@ nstat -n # remember the counters now; the next nstat prints the difference
 start_bg python3 "$demo" --seconds 5 >"$cap" 2>&1
 reader_pid=$SEE_BG_PID
 sleep 2
-see_sh "timeout 2 tcpdump -l -i lo -nn 'tcp port 9003' 2>/dev/null | head -n 8"
+# tcpdump's banner and summary go to stderr; keep any error, drop only those lines.
+see_sh "${SUDO:+$SUDO }timeout 2 tcpdump -l -i lo -nn -c 8 'tcp port 9003' 2>&1 | grep -v -E '^(listening on|tcpdump: verbose output)|packets (captured|received by filter|dropped by kernel)'"
 see_run ss -tni "$sockets"
 wait_bg "$reader_pid" 15 || true
 see_log "\$ python3 $demo --seconds 5"

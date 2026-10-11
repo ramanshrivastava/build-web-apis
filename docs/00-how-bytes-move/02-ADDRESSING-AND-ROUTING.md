@@ -747,7 +747,8 @@ Read the strings as bytes (strace prints them as C escapes, in octal). The UDP q
 ### 8.5 iptables and conntrack — NAT is a table entry with a countdown
 
 ```bash
-iptables -t nat -A OUTPUT -p udp -d 198.51.100.53 --dport 53 -j DNAT --to-destination 192.168.65.7:53
+iptables -t nat -A OUTPUT -p udp -d 198.51.100.53 --dport 53 -m comment --comment "see-00-02-$$" \
+  -j DNAT --to-destination 192.168.65.7:53
 python3 demos/00/02/python/main.py --server 198.51.100.53 example.com | grep -E '^(dns|sendto|recvfrom|header)'
 conntrack -L -p udp --orig-dst 198.51.100.53
 ```
@@ -761,7 +762,7 @@ conntrack v1.4.8 (conntrack-tools): 1 flow entries have been shown.
 udp      17 29 src=192.168.65.3 dst=198.51.100.53 sport=62591 dport=53 src=192.168.65.7 dst=192.168.65.3 sport=53 dport=62591 mark=0 use=1
 ```
 
-`198.51.100.53` is in TEST-NET-2 (RFC 5737), an address range that exists only for documentation: nothing on the internet answers there. The DNAT rule sends the query to the real resolver instead, and the demo, which asked `198.51.100.53`, receives an answer from `198.51.100.53`. The conntrack line is why. `udp 17` is the protocol name and number; `29` is the seconds left on the entry (30 s for a flow that was answered within two seconds, `nf_conntrack_udp_timeout`, as section 3 read from the kernel source). The first `src=… dst=… sport=… dport=…` group is the original tuple, the packet as the demo sent it; the second group is the reply tuple, what conntrack expects back: from `192.168.65.7`, not from `198.51.100.53`. That difference is the NAT. The answer was rewritten back only because this entry matched it, and 29 seconds from now nothing would. Notice also the source, `192.168.65.3`: the route lookup for `198.51.100.53` happened before the rewrite and chose table 2's `eth0` address, and NAT changed only the destination. (`see.sh` deletes the rule on exit.)
+`198.51.100.53` is in TEST-NET-2 (RFC 5737), an address range that exists only for documentation: nothing on the internet answers there. The DNAT rule sends the query to the real resolver instead, and the demo, which asked `198.51.100.53`, receives an answer from `198.51.100.53`. The conntrack line is why. `udp 17` is the protocol name and number; `29` is the seconds left on the entry (30 s for a flow that was answered within two seconds, `nf_conntrack_udp_timeout`, as section 3 read from the kernel source). The first `src=… dst=… sport=… dport=…` group is the original tuple, the packet as the demo sent it; the second group is the reply tuple, what conntrack expects back: from `192.168.65.7`, not from `198.51.100.53`. That difference is the NAT. The answer was rewritten back only because this entry matched it, and 29 seconds from now nothing would. Notice also the source, `192.168.65.3`: the route lookup for `198.51.100.53` happened before the rewrite and chose table 2's `eth0` address, and NAT changed only the destination. (`see.sh` deletes the rule on exit by its exact specification, comment included: `-m comment --comment "see-00-02-$$"` tags each run's rule uniquely, so the cleanup can never remove an identical rule that someone else installed.)
 
 ### 8.6 dig +trace — the referral chain a resolver walks
 
