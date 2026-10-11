@@ -745,7 +745,7 @@ The five queued connections come out at `+0.0 s`. The other three arrive at `+0.
 just see 00/04
 ```
 
-`demos/00/04/see.sh` replays every observation above (sysctl, the demo, `ss -lnt`, `ss -tn`, `ss -tm`, `/proc/net/tcp`, `tcpdump`, `nstat`, the iptables SYN-ACK drop, the drain and `ss -tano`) and passes when a line matches `EXPECT='^LISTEN +5 +4 '`. The iptables rule is removed on exit even if the script fails.
+`demos/00/04/see.sh` replays every observation above (sysctl, the demo, `ss -lnt`, `ss -tn`, `ss -tm`, `/proc/net/tcp`, `tcpdump`, `nstat`, the iptables SYN-ACK drop, the drain and `ss -tano`) and passes when a line matches `EXPECT='^LISTEN +5 +4 '`. The iptables rule is removed on exit even if the script fails. The commands above are printed as the lab runs them, as root; outside the lab, prefix `tcpdump` and `iptables` with `sudo`. `see.sh` does that through `$SUDO`, which is empty as root and `sudo -n` otherwise.
 
 ---
 

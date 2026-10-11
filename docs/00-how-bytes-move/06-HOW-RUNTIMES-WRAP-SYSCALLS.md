@@ -793,7 +793,7 @@ While the main thread sat in `recvfrom()`, the spinner had the interpreter to it
 just see 00/06
 ```
 
-`demos/00/06/see.sh` builds the Go and Rust servers, replays all seven observations, and passes when a line matches `EXPECT='epoll_p?wait\(.*EPOLLIN.*\) = 1'`, that is, when a runtime was seen being woken by epoll for a readable fd.
+`demos/00/06/see.sh` builds the Go and Rust servers, replays all seven observations, and passes when a line matches `EXPECT='epoll_p?wait\(.*EPOLLIN.*\) = 1'`, that is, when a runtime was seen being woken by epoll for a readable fd. The commands above are printed as the lab runs them, as root; outside the lab, prefix `py-spy` with `sudo`. `see.sh` does that through `$SUDO`, which is empty as root and `sudo -n` otherwise.
 
 ---
 

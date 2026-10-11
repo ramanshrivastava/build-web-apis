@@ -785,7 +785,7 @@ Shrinking `eth0`'s MTU would break the Docker VM, so `see.sh` creates a dummy in
 just see 00/01
 ```
 
-`demos/00/01/see.sh` replays all six observations (the dummy interface is removed on exit) and passes when a line matches `EXPECT='message too long, mtu=1400'`.
+`demos/00/01/see.sh` replays all six observations (the dummy interface is removed on exit) and passes when a line matches `EXPECT='message too long, mtu=1400'`. The commands above are printed as the lab runs them, as root; outside the lab, prefix `tcpdump`, `ip link`/`ip addr` and the sniffer (`python3 demos/00/01/python/main.py`, which opens an `AF_PACKET` socket) with `sudo`. `see.sh` does that through `$SUDO`, which is empty as root and `sudo -n` otherwise.
 
 ---
 

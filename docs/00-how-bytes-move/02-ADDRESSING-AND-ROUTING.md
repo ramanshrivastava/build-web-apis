@@ -785,7 +785,7 @@ The recursion that `192.168.65.7` hides from the demo, done by hand. `dig` first
 just see 00/02
 ```
 
-`demos/00/02/see.sh` replays all six observations (it needs network) and passes when a line matches `EXPECT='dst=198\.51\.100\.53 sport=[0-9]+ dport=53 src='`: the conntrack entry whose original destination is the TEST-NET address and whose reply comes from somewhere else.
+`demos/00/02/see.sh` replays all six observations (it needs network) and passes when a line matches `EXPECT='dst=198\.51\.100\.53 sport=[0-9]+ dport=53 src='`: the conntrack entry whose original destination is the TEST-NET address and whose reply comes from somewhere else. The commands above are printed as the lab runs them, as root; outside the lab, prefix `tcpdump`, `ip neigh del`, `iptables` and `conntrack` with `sudo`. `see.sh` does that through `$SUDO`, which is empty as root and `sudo -n` otherwise.
 
 ---
 

@@ -734,7 +734,7 @@ The last command removes the qdisc; `see.sh` also does it on exit.
 just see 00/03
 ```
 
-`demos/00/03/see.sh` replays every command in this section, cleans up the `tc` qdisc on exit, and passes when an output line matches `EXPECT='win 0,'`.
+`demos/00/03/see.sh` replays every command in this section, cleans up the `tc` qdisc on exit, and passes when an output line matches `EXPECT='win 0,'`. The commands above are printed as the lab runs them, as root; outside the lab, prefix `tcpdump` and `tc` with `sudo`. `see.sh` does that through `$SUDO`, which is empty as root and `sudo -n` otherwise.
 
 ---
 
