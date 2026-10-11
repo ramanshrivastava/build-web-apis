@@ -96,6 +96,7 @@ see_log "## 4. Rust: tokio worker threads and the I/O driver"
 start_bg "$rustbin" >/dev/null
 pid=$SEE_BG_PID
 wait_listen
+sleep 0.5 # let tokio finish starting its workers
 threads "$pid"
 stop_bg "$pid"
 start_bg strace -f -e 'trace=/^epoll_p?wait$,accept4,recvfrom,sendto' -o "$cap" "$rustbin" >/dev/null

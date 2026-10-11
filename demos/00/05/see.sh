@@ -68,6 +68,13 @@ start_bg bash -c "ulimit -n 8; exec python3 $demo --mode epoll" >"$cap" 2>&1
 server=$SEE_BG_PID
 wait_listen
 for _ in 1 2 3 4 5; do start_bg bash -c "sleep 3 | nc 127.0.0.1 9005 >/dev/null"; done
+# Wait until two connections sit in the accept queue (the listener's Recv-Q), then
+# long enough for the fourth accept() to fail and fail again after the 1 s back-off.
+deadline=$((SECONDS + 10))
+until [ "$(ss -lntH 'sport = :9005' | awk '{print $2}')" -ge 2 ]; do
+  if [ "$SECONDS" -ge "$deadline" ]; then echo "see: the accept queue never reached 2" >&2; exit 1; fi
+  sleep 0.1
+done
 sleep 1.5
 see_run ss -tan 'sport = :9005'
 stop_bg "$server"

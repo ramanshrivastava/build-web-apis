@@ -49,7 +49,13 @@ sleep 1.5
 see_run ss -lnt 'sport = :9004'
 see_run ss -tn state syn-sent 'dport = :9004'
 see_sh "ss -tmn state established 'sport = :9004' | head -n 5"
-see_sh "head -n 1 /proc/net/tcp; grep -i ':232C ' /proc/net/tcp | head -n 4"
+# /proc/net/tcp, raw: the header, the listener, and both ends of the first queued
+# connection (pass 1 finds its client address, pass 2 prints the matching rows).
+read -r -d '' raw_rows <<'AWK' || true
+awk 'NR == FNR { if ($2 ~ /:232C$/ && $4 == "01" && !c) c = $3; next }
+     FNR == 1 || $2 == c || ($2 ~ /:232C$/ && ($3 == "00000000:0000" || $3 == c))' /proc/net/tcp /proc/net/tcp
+AWK
+see_sh "$raw_rows"
 wait_bg "$tcpdump_pid" 10 || true
 see_log "\$ tcpdump -i lo -nn 'tcp dst port 9004 and tcp[tcpflags] == tcp-syn'"
 see_log "$(cat "$cap")"
