@@ -17,7 +17,7 @@
 # Start every background process with start_bg: on any exit, see_cleanup stops each
 # one and its children with a bounded TERM-then-KILL, so a see.sh never hangs or leaks.
 #
-# Runs as root in the lab (`just see`) and via sudo on the CI runner.
+# Runs as root in the lab (`just see`) and via passwordless sudo on the CI runner.
 
 set -euo pipefail
 
@@ -25,8 +25,9 @@ set -euo pipefail
 SEE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SEE_LOG="$(mktemp "${TMPDIR:-/tmp}/see.XXXXXX")"
 SEE_PIDS=""
+# Root in the lab; passwordless sudo on the CI runner (-n: fail instead of prompting).
 # shellcheck disable=SC2034
-if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO="sudo"; fi
+if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
 
 SEE_BG_PID=""
 
@@ -35,26 +36,52 @@ see_alive() {
   [ -r "/proc/$1/status" ] && ! grep -q '^State:[[:space:]]*Z' "/proc/$1/status" 2>/dev/null
 }
 
-# see_forget PID : drop a reaped pid from SEE_PIDS, so cleanup never signals a reused pid.
+# see_group_alive PGID : true while any live process is still in process group PGID.
+see_group_alive() {
+  local p
+  for p in $(pgrep -g "$1" 2>/dev/null); do see_alive "$p" && return 0; done
+  return 1
+}
+
+# see_running PGID : the start_bg process or anything left in its group is still alive.
+see_running() { see_alive "$1" || see_group_alive "$1"; }
+
+# see_signal SIG PGID : signal the whole group, as root when the job runs under $SUDO.
+see_signal() {
+  # shellcheck disable=SC2086  # $SUDO is empty or "sudo -n"
+  $SUDO kill -"$1" -- "-$2" 2>/dev/null && return 0
+  # No such group (setsid missing): signal the process itself, but only while it is
+  # still ours to signal; a reaped pid may already belong to someone else.
+  if see_alive "$2"; then $SUDO kill -"$1" "$2" 2>/dev/null || true; fi
+}
+
+# see_forget PID : drop a pid from SEE_PIDS once its group is empty, so cleanup never
+# signals a reused pid.
 see_forget() {
   local p kept=""
   for p in $SEE_PIDS; do [ "$p" = "$1" ] || kept="$kept $p"; done
   SEE_PIDS="$kept"
 }
 
-# stop_bg PID [SECONDS] : TERM a start_bg process and its process group (strace and its
-# tracee, a bash -c pipeline), wait at most SECONDS (default 3), then KILL; always reaps.
+# stop_bg PGID [SECONDS] : TERM the start_bg process's whole group (strace and its tracee,
+# a bash -c pipeline, a $SUDO job), wait at most SECONDS (default 3) for the group to
+# empty, then KILL it and wait up to 2 s more; reap the parent and forget the group.
 stop_bg() {
   local pid="$1" deadline=$((SECONDS + ${2:-3}))
-  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-  while see_alive "$pid" && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.1; done
-  kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  see_signal TERM "$pid"
+  while see_running "$pid" && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.1; done
+  if see_running "$pid"; then
+    see_signal KILL "$pid"
+    deadline=$((SECONDS + 2))
+    while see_running "$pid" && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.1; done
+  fi
+  see_alive "$pid" || { wait "$pid"; } 2>/dev/null || true # reap; never wait on a live pid
   see_forget "$pid"
 }
 
-# wait_bg PID [SECONDS] : wait for a start_bg process to finish on its own, at most
-# SECONDS (default 10). Returns 0 if it finished, 1 if it had to be stopped.
+# wait_bg PGID [SECONDS] : wait at most SECONDS (default 10) for a start_bg process to
+# exit by itself; then stop anything it left running in its group. Returns 0 if it
+# exited in time, 1 if it had to be stopped.
 wait_bg() {
   local pid="$1" deadline=$((SECONDS + ${2:-10}))
   while see_alive "$pid"; do
@@ -66,10 +93,11 @@ wait_bg() {
     sleep 0.1
   done
   wait "$pid" 2>/dev/null || true
-  see_forget "$pid"
+  # The parent is gone; anything still in its group (a tracee, a pipeline stage) goes too.
+  if see_group_alive "$pid"; then stop_bg "$pid" 2; else see_forget "$pid"; fi
 }
 
-# Every start_bg process is stopped (bounded, never an open-ended wait) on any exit path.
+# Every start_bg group is stopped (bounded, never an open-ended wait) on any exit path.
 see_cleanup() {
   local pid
   for pid in $SEE_PIDS; do stop_bg "$pid" 2; done
