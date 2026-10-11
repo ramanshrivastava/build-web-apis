@@ -65,7 +65,9 @@ see_forget() {
 
 # stop_bg PGID [SECONDS] : TERM the start_bg process's whole group (strace and its tracee,
 # a bash -c pipeline, a $SUDO job), wait at most SECONDS (default 3) for the group to
-# empty, then KILL it and wait up to 2 s more; reap the parent and forget the group.
+# empty, then KILL it and wait up to 2 s more; reap the parent. Returns 0 and forgets the
+# group once it is empty; if anything survives KILL (a signal that could not be
+# delivered, a process stuck in the kernel), it warns, keeps the record and returns 1.
 stop_bg() {
   local pid="$1" deadline=$((SECONDS + ${2:-3}))
   see_signal TERM "$pid"
@@ -76,12 +78,16 @@ stop_bg() {
     while see_running "$pid" && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.1; done
   fi
   see_alive "$pid" || { wait "$pid"; } 2>/dev/null || true # reap; never wait on a live pid
+  if see_running "$pid"; then
+    echo "see: WARN, group $pid still alive after KILL" >&2
+    return 1
+  fi
   see_forget "$pid"
 }
 
 # wait_bg PGID [SECONDS] : wait at most SECONDS (default 10) for a start_bg process to
 # exit by itself; then stop anything it left running in its group. Returns 0 if it
-# exited in time, 1 if it had to be stopped.
+# exited in time and its group is empty, 1 if it had to be stopped or left survivors.
 wait_bg() {
   local pid="$1" deadline=$((SECONDS + ${2:-10}))
   while see_alive "$pid"; do
@@ -97,10 +103,11 @@ wait_bg() {
   if see_group_alive "$pid"; then stop_bg "$pid" 2; else see_forget "$pid"; fi
 }
 
-# Every start_bg group is stopped (bounded, never an open-ended wait) on any exit path.
+# Every start_bg group is stopped (bounded, never an open-ended wait) on any exit path; a
+# group that survives KILL is reported by stop_bg, never waited on forever.
 see_cleanup() {
   local pid
-  for pid in $SEE_PIDS; do stop_bg "$pid" 2; done
+  for pid in $SEE_PIDS; do stop_bg "$pid" 2 || true; done
   rm -f "$SEE_LOG"
 }
 trap see_cleanup EXIT
