@@ -64,7 +64,7 @@ frame 2: 00:00:00:00:00:00 > 00:00:00:00:00:00 type 0x0800 IPv4 len 50 host | UD
 smoke: OK, the datagram to :9001 crossed lo twice (outgoing, host)
 ```
 
-- Frame line: `frame {n}: {src mac} > {dst mac} type 0x{ethertype:04x} {name} len {frame bytes} {pkttype}` then, for IPv4 only, ` | {PROTO} {src}:{sport} > {dst}:{dport}` (TCP/UDP) or ` | {PROTO} {src} > {dst}` (anything else). MACs lowercase, colon-separated. Names: `0x0800 IPv4`, `0x0806 ARP`, `0x86dd IPv6`, `0x8100 802.1Q`, anything else `?`. PROTO: `ICMP`, `TCP`, `UDP`, else `proto {n}`. Pkttype: `0 host`, `1 broadcast`, `2 multicast`, `3 otherhost`, `4 outgoing`, else the number. An IPv4 payload under 20 bytes prints ` | short IPv4 header`.
+- Frame line: `frame {n}: {src mac} > {dst mac} type 0x{ethertype:04x} {name} len {frame bytes} {pkttype}` then, for IPv4 only, ` | {PROTO} {src}:{sport} > {dst}:{dport}` (TCP/UDP) or ` | {PROTO} {src} > {dst}` (anything else). MACs lowercase, colon-separated. Names: `0x0800 IPv4`, `0x0806 ARP`, `0x86dd IPv6`, `0x8100 802.1Q`, anything else `?`. PROTO: `ICMP`, `TCP`, `UDP`, else `proto {n}`. Pkttype: `0 host`, `1 broadcast`, `2 multicast`, `3 otherhost`, `4 outgoing`, else the number. An IPv4 payload under 20 bytes prints ` | short IPv4 header`; a version other than 4, an IHL under 20 bytes or an IHL longer than the payload prints ` | malformed IPv4 header`; a fragment with a non-zero offset (bytes 6–7, low 13 bits, times 8) prints ` | {PROTO} {src} > {dst} fragment at byte {offset}` and never decodes ports, because its payload starts mid-datagram.
 - Failure: `smoke: FAIL, saw {sorted set or 'no'} copies of the datagram to :9001` (Python prints the sorted list, e.g. `['host']`; Go/Rust may print `[host]`).
 - Errors: no AF_PACKET (non-Linux) `sniff: AF_PACKET is Linux-only; run it in the lab: just demo 00/01 python` exit 2 (say `go`/`rust` instead of `python`); EPERM `sniff: AF_PACKET needs CAP_NET_RAW; run as root (the lab runs as root)` exit 3; bind failure `sniff: cannot bind to '{iface}': {strerror}` exit 2.
 
@@ -76,7 +76,7 @@ smoke: OK, the datagram to :9001 crossed lo twice (outgoing, host)
 
 **Flags:** positional `NAME` (default `example.com`), `--type T` (one of `A AAAA CNAME NS SOA TXT`, default `A`), `--server IP` (default: first IPv4 `nameserver` in `/etc/resolv.conf`), `--port N` (default 53), `--tcp`, `--smoke`.
 
-**Behaviour:** build the query by hand (no resolver library, no `net.Resolver`, no `trust-dns`/`hickory`): 12-byte header `id` (random 16 bits), flags `0x0100` (RD), qdcount 1, others 0; the name as length-prefixed labels ending in `00`; qtype; class IN (1). Print it as a hex dump, send it with one `sendto()`/`WriteTo` on a UDP socket (3 s timeout), read one reply with `recvfrom()` into a 4096-byte buffer, check the id, parse header, skip the question, parse answers with name-compression pointers (`0xC0` prefix; guard against loops after 20 jumps). If `tc=1` and not `--tcp`, print the `truncated:` line and repeat the same query over TCP: prefix the 2-byte big-endian length, `sendall`, read until `2 + length` bytes have arrived.
+**Behaviour:** build the query by hand (no resolver library, no `net.Resolver`, no `trust-dns`/`hickory`): 12-byte header `id` (random 16 bits), flags `0x0100` (RD), qdcount 1, others 0; the name as length-prefixed labels ending in `00`; qtype; class IN (1). Print it as a hex dump, send it with one `sendto()`/`WriteTo` on a UDP socket (3 s timeout), read one reply with `recvfrom()` into a 4096-byte buffer, parse the header and refuse the reply unless its id matches (one `checked_reply`/`checkedReply` path that every answer goes through, the TCP fallback's included), skip the question, parse answers with name-compression pointers (`0xC0` prefix; guard against loops after 20 jumps). If `tc=1` and not `--tcp`, print the `truncated:` line and repeat the same query over TCP: prefix the 2-byte big-endian length, `sendall`, read until `2 + length` bytes have arrived.
 
 **Smoke:** `example.com A` over UDP, then over TCP; pass if both rcodes are NOERROR and at least one `A` answer arrived. `run.sh` skips the smoke when `CI_OFFLINE=1`; the binary itself does not need to check.
 
@@ -171,8 +171,8 @@ smoke: OK, 5 waited in the accept queue, 3 were dropped, all 8 drained
 **Behaviour:**
 
 - Listener: `socket`, `SO_REUSEADDR`, `bind 127.0.0.1:{port}`, `listen(16)`; in epoll mode set `O_NONBLOCK` on it.
-- Blocking: loop `accept` → for each client loop `read(fd, 65536)`; print; on 0 bytes stop; else `write` the same bytes and print; then `close` and print. Count a client as served when it is closed; stop after `max-clients` if non-zero.
-- Epoll: `epoll_create1(EPOLL_CLOEXEC)`, add the listener with `EPOLLIN` (level-triggered). Loop `epoll_wait(-1)` and print the ready fds. Listener ready: accept until `EAGAIN` (print the EAGAIN line), set each new fd `O_NONBLOCK`, add it with `EPOLLIN`. On `EMFILE`: print the EMFILE line, sleep 1 s, return to `epoll_wait`. Client ready: read until `EAGAIN`; echo each chunk; on 0 bytes delete it from epoll, close it, count it served.
+- Blocking: loop `accept` → for each client loop `read(fd, 65536)`; print; on 0 bytes stop; else `write` the bytes back, looping until all of them are written (a `write()` may take fewer), printing each call's real count; then `close` and print. Close the client's fd on any error path too. Count a client as served when it is closed; stop after `max-clients` if non-zero.
+- Epoll: `epoll_create1(EPOLL_CLOEXEC)`, add the listener with `EPOLLIN` (level-triggered). Loop `epoll_wait(-1)` and print the ready fds. Listener ready: accept until `EAGAIN` (print the EAGAIN line), set each new fd `O_NONBLOCK`, add it with `EPOLLIN`. On `EMFILE`: print the EMFILE line, sleep 1 s, return to `epoll_wait`. Client ready: read until `EAGAIN`; echo each chunk with one non-blocking `write()`. If it takes only part of the chunk, or returns `EAGAIN`, keep the rest as that client's pending bytes, switch its interest to `EPOLLOUT` (`epoll_ctl(MOD)`), print the short-write line and stop reading it. When a client with pending bytes is ready, write them; once all are gone switch back to `EPOLLIN` and print the drained line. Route events by state (pending bytes or not), not by the event mask. On 0 bytes delete it from epoll, close it, count it served; on `ECONNRESET` or `EPIPE` print the reset line and do the same. Own every accepted fd: close it if `O_NONBLOCK` or `epoll_ctl(ADD)` fails, and close all remaining clients when the loop returns (Go: a map plus `defer`; Rust: `OwnedFd` in a `HashMap`).
 - Use `read`/`write` syscalls on the fds (not `recv`/`send`), so the strace output matches the lesson (`read(5, "hello from A\n", 65536) = 13`).
 
 **Smoke:** for each mode in order (blocking, then epoll): start the server on a thread/goroutine with `max-clients 2`, connect clients A and B, A sends `hello from A\n` and must get its echo within 1 s; B sends `hello from B\n` and waits 0.5 s; then A closes; B waits up to 1 s more. Blocking passes if A echoed, B did *not* echo early, and B echoed after A closed. Epoll passes if A echoed and B echoed early. Print each mode's line, then `smoke: OK` (exit 0) or `smoke: FAIL` (exit 1).
@@ -193,6 +193,10 @@ accept() = EAGAIN (accept queue empty)
 accept() = EMFILE (no free fd; the connection stays queued)
 epoll_wait() = 2 ready: fd 7, fd 8
 read(5) = EAGAIN (drained; back to epoll_wait)
+write(5) = 49510 (short write: 16026 bytes pending, waiting for EPOLLOUT)
+write(5) = EAGAIN (send buffer full: 65536 bytes pending, waiting for EPOLLOUT)
+epoll_ctl(MOD, fd 5, EPOLLIN): output drained, reading again
+fd 5: ECONNRESET (Connection reset by peer); closing
 smoke: blocking: B echoed only after A hung up: True
 smoke: epoll: B echoed while A was still connected: True
 smoke: OK
@@ -230,8 +234,9 @@ smoke: FAIL, 49 of 50 clients got their echo
 
 - Go's thread count is `pprof.Lookup("threadcreate").Count()`; Rust's worker count is `std::thread::available_parallelism()` (tokio's default worker count).
 - Bind failure: `echo-goroutines: {error}` / `echo-tokio: {error}` exit 1. Rust unknown argument: `echo-tokio: unknown argument {arg}` exit 2.
+- `--buf-size` must be positive: `echo-asyncio: --buf-size must be a positive byte count` (`echo-goroutines: …`, `echo-tokio: …`) and exit 2, checked before any server starts. A zero-length read returns at once (Go's returns `(0, nil)`, so a handler would spin).
 
-**Exit codes:** 0 ok, 1 smoke failed or bind error, 2 bad argument (Rust).
+**Exit codes:** 0 ok, 1 smoke failed or bind error, 2 bad argument (a non-positive `--buf-size` in every port; an unknown or malformed flag).
 
 **Must reproduce (what the See It shows):** Go: `accept4(…, SOCK_CLOEXEC|SOCK_NONBLOCK)`, `read(4) = -1 EAGAIN`, the netpoller's `epoll_pwait(…, -1) = 1`, then `read(4, "hello 1\n", 65536) = 8`, possibly on another OS thread; `GODEBUG=schedtrace=1000` works unchanged. Rust: 14 threads named `tokio-rt-worker` (one per CPU) plus `main`; `recvfrom`/`sendto(…, MSG_NOSIGNAL)`; a worker blocked in `epoll_pwait(…, 1024, -1, …)`. Optional extras that need more crates (`tokio-console` via `console-subscriber`, `RUST_LOG=mio=trace` via `tracing-subscriber`) belong behind a Cargo feature that is off by default, so the smoke build stays small.
 
