@@ -700,82 +700,82 @@ guaranteeing for you on every accepted connection.
 
 ## 8. See It: The Syscall Boundary of Two Echo Servers
 
-Two tools carry this lesson: `strace` shows every syscall each server makes and when, and `ss` shows the kernel's queues filling while the program is not looking. `/proc/<pid>/fd` and `lsof` confirm that sockets and epoll instances are just entries in the fd table. Everything below was captured in the lab on kernel `7.0.14-linuxkit` (Docker Desktop's VM, aarch64) with strace 6.8. Run the servers in one `just lab` shell and the clients in another; `see.sh` does both in one script.
+Two tools carry this lesson: `strace` shows every syscall each server makes and when, and `ss` shows the kernel's queues filling while the program is not looking. `/proc/<pid>/fd` and `lsof` confirm that sockets and epoll instances are just entries in the fd table. Everything below was captured in the lab on kernel `7.0.14-linuxkit` (Docker Desktop's VM, aarch64) with strace 6.8. Each block starts its server in the background, waits for the listener, and runs the clients from the same `just lab` shell, as `see.sh` does.
 
 One arm64 detail first. arm64 has no `epoll_wait` syscall at all: its syscall table (`include/uapi/asm-generic/unistd.h`) defines `epoll_create1`, `epoll_ctl` and `epoll_pwait`, and glibc implements `epoll_wait()` as `epoll_pwait()` with a `NULL` signal mask. So on this lab strace prints `epoll_pwait(4, …, 1023, -1, NULL, 8)` where an x86_64 machine such as the CI runner prints `epoll_wait(4, …, 1023, -1)`. Same call, same kernel path (`do_epoll_wait()`). The strace filter `/^epoll` (a regex) matches both.
 
 ### 8.1 strace -tt — the blocking server serves one client at a time
 
-Start the blocking server under strace, then two clients: A sends a line and holds its connection open for a second, and B connects 0.2 s after A, sends a line and hangs up.
+Start the blocking server under strace, with the trace going to a file, and wait for its listener. Then start two clients: A sends a line and holds its connection open for a second, and B connects 0.2 s after A, sends a line and hangs up. `wait` returns when the server exits after its second client, and the last line prints the trace from the first `accept4()`:
 
 ```bash
-strace -f -tt -e trace=accept4,read,write,close \
-  python3 demos/00/05/python/main.py --mode blocking --max-clients 2
-```
-
-```bash
+strace -f -tt -o /tmp/blocking.strace -e trace=accept4,read,write,close \
+  python3 demos/00/05/python/main.py --mode blocking --max-clients 2 >/dev/null &
+until ss -lnt 'sport = :9005' | grep -q LISTEN; do sleep 0.1; done
 (printf 'hello from A\n'; sleep 1) | nc -N 127.0.0.1 9005 >/dev/null &
 sleep 0.2
 printf 'hello from B\n' | nc -N 127.0.0.1 9005 >/dev/null &
+sleep 0.3
+ss -tan 'sport = :9005'      # section 8.2: B waits while A is still connected
+wait                         # the server exits after its two clients
+sed -n '/accept4/,$p' /tmp/blocking.strace | grep -v -E 'write\(1,|resumed|exited' | head -n 12
 ```
+
+The `ss` table this prints first is section 8.2. The first eight lines of the trace:
 
 ```text
-27147 22:19:01.066448 accept4(3, {sa_family=AF_INET, sin_port=htons(55292), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 4
-27147 22:19:01.100486 read(4, "hello from A\n", 65536) = 13
-27147 22:19:01.100670 write(4, "hello from A\n", 13) = 13
-27147 22:19:01.100799 read(4, "", 65536) = 0
-27147 22:19:02.103616 close(4)          = 0
-27147 22:19:02.104540 accept4(3, {sa_family=AF_INET, sin_port=htons(55308), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 4
-27147 22:19:02.105142 read(4, "hello from B\n", 65536) = 13
-27147 22:19:02.105639 write(4, "hello from B\n", 13) = 13
+12409 01:29:30.616194 accept4(3, {sa_family=AF_INET, sin_port=htons(57842), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 4
+12409 01:29:30.650414 read(4, "hello from A\n", 65536) = 13
+12409 01:29:30.650584 write(4, "hello from A\n", 13) = 13
+12409 01:29:30.650719 read(4, "", 65536) = 0
+12409 01:29:31.651265 close(4)          = 0
+12409 01:29:31.651753 accept4(3, {sa_family=AF_INET, sin_port=htons(57854), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 4
+12409 01:29:31.652283 read(4, "hello from B\n", 65536) = 13
+12409 01:29:31.652531 write(4, "hello from B\n", 13) = 13
 ```
 
-Read the timestamps carefully: `strace -tt` prints the time a syscall **started**. The fourth line, `read(4, "", 65536) = 0`, started at `01.100799` and did not return until A's FIN arrived; the next line, `close(4)` at `02.103616`, marks when it did. For that whole second the only thread sat inside one `read()`. B connected at about `01.27` (0.2 s after A), yet its `accept4()` starts at `02.104540`, 0.8 s later and one millisecond after A's `close(4)`. Then B is served in under 1.5 ms: its bytes had been waiting in its receive buffer all along. Add `-T` to the strace command to print each call's duration and see the one-second `read()` directly.
+Read the timestamps carefully: `strace -tt` prints the time a syscall **started**. The fourth line, `read(4, "", 65536) = 0`, started at `30.650719` and did not return until A's FIN arrived; the next line, `close(4)` at `31.651265`, marks when it did. For that whole second the only thread sat inside one `read()`. B connected at about `30.85` (0.2 s after A), yet its `accept4()` starts at `31.651753`, 0.8 s later and half a millisecond after A's `close(4)`. Then B is served in under 1.5 ms: its bytes had been waiting in its receive buffer all along. Add `-T` to the strace command to print each call's duration and see the one-second `read()` directly.
 
 ### 8.2 ss -tan — B waits in the accept queue
 
-While A holds its connection open, ask the kernel about every TCP socket on port 9005, the listener included (this capture comes from a later `just see 00/05` run than 8.1, so the client ports differ):
-
-```bash
-ss -tan 'sport = :9005'
-```
+The `ss -tan` line in the 8.1 block runs 0.5 s after A connected, while A still holds its connection open. It lists every TCP socket on port 9005, the listener included:
 
 ```text
 State      Recv-Q Send-Q Local Address:Port Peer Address:Port Process
 LISTEN     1      16         127.0.0.1:9005      0.0.0.0:*
-CLOSE-WAIT 14     0          127.0.0.1:9005    127.0.0.1:64354
-ESTAB      0      0          127.0.0.1:9005    127.0.0.1:64352
+ESTAB      0      0          127.0.0.1:9005    127.0.0.1:57842
+CLOSE-WAIT 14     0          127.0.0.1:9005    127.0.0.1:57854
 ```
 
-On a listening socket, `Recv-Q` is the number of established connections in the accept queue and `Send-Q` is its limit, the `16` passed to `listen()` (lesson 0.4). `Recv-Q 1` is client B. The other two rows are the connections themselves. `ESTAB … 64352` is A, accepted as fd 4, the one the server is blocked in `read()` on. `CLOSE-WAIT 14 … 64354` is B, and it shows how much happened without the process: the handshake completed, B's 13 bytes arrived, and so did its FIN (B's `nc -N` hung up right after sending), which moved the socket to `CLOSE-WAIT` and counts as one more unit in `Recv-Q`, 13 + 1 = 14. All of that sits in kernel memory, owned by no fd. This is the kernel's half of Figure 2. Nothing in the server's output mentions B yet, because no syscall has touched it.
+On a listening socket, `Recv-Q` is the number of established connections in the accept queue and `Send-Q` is its limit, the `16` passed to `listen()` (lesson 0.4). `Recv-Q 1` is client B. The other two rows are the connections themselves. `ESTAB … 57842` is A, accepted as fd 4, the one the server is blocked in `read()` on. `CLOSE-WAIT 14 … 57854` is B, and it shows how much happened without the process: the handshake completed, B's 13 bytes arrived, and so did its FIN (B's `nc -N` hung up right after sending), which moved the socket to `CLOSE-WAIT` and counts as one more unit in `Recv-Q`, 13 + 1 = 14. All of that sits in kernel memory, owned by no fd. This is the kernel's half of Figure 2. Nothing in the server's output mentions B yet, because no syscall has touched it.
 
 ### 8.3 strace — the epoll server: O_NONBLOCK, readiness, EAGAIN
 
-Now the epoll server with the same two clients, except that B also holds its connection for 0.8 s, so both are open at once:
+Now the epoll server with the same two clients, except that B also holds its connection for 0.8 s, so both are open at once. Again the trace goes to a file and is printed once the server exits:
 
 ```bash
-strace -f -e trace=listen,accept4,read,write,close,ioctl,/^epoll \
-  python3 demos/00/05/python/main.py --mode epoll --max-clients 2
-```
-
-```bash
+strace -f -o /tmp/epoll.strace -e trace=listen,accept4,read,write,close,ioctl,/^epoll \
+  python3 demos/00/05/python/main.py --mode epoll --max-clients 2 >/dev/null &
+until ss -lnt 'sport = :9005' | grep -q LISTEN; do sleep 0.1; done
 (printf 'hello from A\n'; sleep 1) | nc -N 127.0.0.1 9005 >/dev/null &
 sleep 0.2
 (printf 'hello from B\n'; sleep 0.8) | nc -N 127.0.0.1 9005 >/dev/null &
+wait
+sed -n '/listen(/,$p' /tmp/epoll.strace | grep -v -E 'write\(1,|resumed|exited' | head -n 22
 ```
 
 The setup and client A:
 
 ```text
-27201 listen(3, 16)                     = 0
-27201 ioctl(3, FIONBIO, [1])            = 0
-27201 epoll_create1(EPOLL_CLOEXEC)      = 4
-27201 epoll_ctl(4, EPOLL_CTL_ADD, 3, {events=EPOLLIN, data={u32=3, u64=18014398509481987}}) = 0
-27201 epoll_pwait(4, [{events=EPOLLIN, data={u32=3, u64=18014398509481987}}], 1023, -1, NULL, 8) = 1
-27201 accept4(3, {sa_family=AF_INET, sin_port=htons(55314), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 5
-27201 ioctl(5, FIONBIO, [1])            = 0
-27201 epoll_ctl(4, EPOLL_CTL_ADD, 5, {events=EPOLLIN, data={u32=5, u64=18014398509481989}}) = 0
-27201 accept4(3, 0xffffe9dcbf78, [16], SOCK_CLOEXEC) = -1 EAGAIN (Resource temporarily unavailable)
+12429 listen(3, 16)                     = 0
+12429 ioctl(3, FIONBIO, [1])            = 0
+12429 epoll_create1(EPOLL_CLOEXEC)      = 4
+12429 epoll_ctl(4, EPOLL_CTL_ADD, 3, {events=EPOLLIN, data={u32=3, u64=3940649673949187}}) = 0
+12429 epoll_pwait(4, [{events=EPOLLIN, data={u32=3, u64=3940649673949187}}], 1023, -1, NULL, 8) = 1
+12429 accept4(3, {sa_family=AF_INET, sin_port=htons(55772), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 5
+12429 ioctl(5, FIONBIO, [1])            = 0
+12429 epoll_ctl(4, EPOLL_CTL_ADD, 5, {events=EPOLLIN, data={u32=5, u64=3940649673949189}}) = 0
+12429 accept4(3, 0xffffcb1641d8, [16], SOCK_CLOEXEC) = -1 EAGAIN (Resource temporarily unavailable)
 ```
 
 Every idea from sections 3 and 4 is on screen. `ioctl(3, FIONBIO, [1])` is `os.set_blocking()` making the listener non-blocking. `epoll_create1` returns fd 4, and `epoll_ctl(…, ADD, 3, …)` puts the listener in the interest set. `epoll_pwait(4, …, 1023, -1, …) = 1` is the loop's only sleep: 1023 is CPython's `maxevents`, `-1` means no timeout, and it returns one ready fd, the listener. Only `u32` in `data` matters: CPython stores the fd in `data.fd` (`pyepoll_internal_ctl()` in `Modules/selectmodule.c`) and leaves the other half of the union as leftover stack, which is why the `u64` value changes from run to run. `accept4() = 5` takes A, which is made non-blocking and registered, and the second `accept4()` returns `-1 EAGAIN`: the accept queue is empty, so `accept_all()` returns.
@@ -783,81 +783,97 @@ Every idea from sections 3 and 4 is on screen. `ioctl(3, FIONBIO, [1])` is `os.s
 Client A's bytes, then client B, while A is still connected:
 
 ```text
-27201 epoll_pwait(4, [{events=EPOLLIN, data={u32=5, u64=18014398509481989}}], 1023, -1, NULL, 8) = 1
-27201 read(5, "hello from A\n", 65536)  = 13
-27201 write(5, "hello from A\n", 13)    = 13
-27201 read(5, 0x1b00abe0, 65536)        = -1 EAGAIN (Resource temporarily unavailable)
-27201 epoll_pwait(4, [{events=EPOLLIN, data={u32=3, u64=18014398509481987}}], 1023, -1, NULL, 8) = 1
-27201 accept4(3, {sa_family=AF_INET, sin_port=htons(55320), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 6
+12429 epoll_pwait(4, [{events=EPOLLIN, data={u32=5, u64=3940649673949189}}], 1023, -1, NULL, 8) = 1
+12429 read(5, "hello from A\n", 65536)  = 13
+12429 write(5, "hello from A\n", 13)    = 13
+12429 read(5, 0x3ad8ea70, 65536)        = -1 EAGAIN (Resource temporarily unavailable)
+12429 epoll_pwait(4, [{events=EPOLLIN, data={u32=3, u64=3940649673949187}}], 1023, -1, NULL, 8) = 1
+12429 accept4(3, {sa_family=AF_INET, sin_port=htons(55774), sin_addr=inet_addr("127.0.0.1")}, [16], SOCK_CLOEXEC) = 6
 …
-27201 read(6, "hello from B\n", 65536)  = 13
-27201 write(6, "hello from B\n", 13)    = 13
+12429 read(6, "hello from B\n", 65536)  = 13
+12429 write(6, "hello from B\n", 13)    = 13
 ```
 
 `epoll_pwait` reports fd 5 readable, `read(5)` returns 13 bytes, `write(5)` echoes them, and the next `read(5)` returns `-1 EAGAIN`: drained, back to `epoll_wait()`. That `EAGAIN` is the line `see.sh` asserts. Then the listener becomes readable again, B is accepted as fd 6 and echoed, all while A's connection is still open. Compare with 8.1: there, B waited 0.8 s for A; here, B is served the moment its bytes arrive, by the same single thread.
 
 ### 8.4 /proc/<pid>/fd and lsof — sockets and epoll are just fds
 
-While both clients are connected, list the epoll server's fd table. The server prints its pid at startup (`echo-epoll: pid …`), or find it with `pgrep -f -n 'main.py --mode epoll'`:
+While both clients are connected, list the epoll server's fd table. This block starts the server itself, so `$!` is its pid, and runs the same two clients as 8.3:
 
 ```bash
-find /proc/27201/fd -mindepth 1 -printf '%f -> %l\n' | sort -n
+set -o pipefail
+python3 demos/00/05/python/main.py --mode epoll --max-clients 2 >/dev/null &
+pid=$!
+until ss -lnt 'sport = :9005' | grep -q LISTEN; do sleep 0.1; done
+(printf 'hello from A\n'; sleep 1) | nc -N 127.0.0.1 9005 >/dev/null &
+sleep 0.2
+(printf 'hello from B\n'; sleep 0.8) | nc -N 127.0.0.1 9005 >/dev/null &
+sleep 0.3                    # both clients are connected now
+find /proc/$pid/fd -mindepth 1 -printf '%f -> %l\n' | sort -n
+lsof -nP -a -p $pid -d 3-20 | awk '{print $4, $5, $8, $9}'
+wait
 ```
+
+The fd table:
 
 ```text
 0 -> /dev/null
 1 -> /dev/null
-2 -> pipe:[39418552]
-3 -> socket:[39428117]
+2 -> pipe:[41174394]
+3 -> socket:[41176455]
 4 -> anon_inode:[eventpoll]
-5 -> socket:[39428120]
-6 -> socket:[39428123]
+5 -> socket:[41176456]
+6 -> socket:[41176462]
 ```
 
-```bash
-lsof -nP -a -p 27201 -d 3-20 | awk '{print $4, $5, $8, $9}'
-```
+lsof's view of fds 3 to 20:
 
 ```text
 FD TYPE NODE NAME
 3u IPv4 TCP 127.0.0.1:9005
 4u a_inode 1053 [eventpoll:3,5,6]
-5u IPv4 TCP 127.0.0.1:9005->127.0.0.1:55314
-6u IPv4 TCP 127.0.0.1:9005->127.0.0.1:55320
+5u IPv4 TCP 127.0.0.1:9005->127.0.0.1:63654
+6u IPv4 TCP 127.0.0.1:9005->127.0.0.1:63668
 ```
 
-`/proc/<pid>/fd` is the fd table itself: each entry is a symlink to what the slot holds. Sockets appear as `socket:[inode]`, and the epoll instance as `anon_inode:[eventpoll]`, a file with no name on any filesystem. `lsof` decodes the rest: fd 3 is the listener, fds 5 and 6 are the two connections with their peer ports (matching `sin_port=htons(55314)` and `htons(55320)` in 8.3), and `[eventpoll:3,5,6]` is the epoll instance's interest set: the listener and both connections. lsof reads it from `/proc/<pid>/fdinfo/4`, whose `tfd:` lines the kernel prints by walking `rbr` (`ep_show_fdinfo()` in `fs/eventpoll.c`).
+`/proc/<pid>/fd` is the fd table itself: each entry is a symlink to what the slot holds. Sockets appear as `socket:[inode]`, and the epoll instance as `anon_inode:[eventpoll]`, a file with no name on any filesystem. `lsof` decodes the rest: fd 3 is the listener, fds 5 and 6 are the two connections with their peer ports (this is a fresh run, so the ports are not the ones in 8.3), and `[eventpoll:3,5,6]` is the epoll instance's interest set: the listener and both connections. lsof reads it from `/proc/<pid>/fdinfo/4`, whose `tfd:` lines the kernel prints by walking `rbr` (`ep_show_fdinfo()` in `fs/eventpoll.c`).
 
 ### 8.5 ulimit -n 8 — accept() meets EMFILE
 
-Cap the server at 8 open files and send it five clients that each stay connected for 3 s:
+Cap the server at 8 open files and send it five clients that each stay connected for 3 s. The block waits until two connections sit in the accept queue (the listener's `Recv-Q`), then 1.5 s more, long enough for the fourth `accept()` to fail and fail again after the demo's 1 s back-off:
 
 ```bash
-bash -c 'ulimit -n 8; exec python3 demos/00/05/python/main.py --mode epoll' &
+bash -c 'ulimit -n 8; exec python3 demos/00/05/python/main.py --mode epoll' >/tmp/emfile.log &
+server=$!
+until ss -lnt 'sport = :9005' | grep -q LISTEN; do sleep 0.1; done
 for _ in 1 2 3 4 5; do (sleep 3 | nc 127.0.0.1 9005 >/dev/null &); done
+until [ "$(ss -lntH 'sport = :9005' | awk '{print $2}')" -ge 2 ]; do sleep 0.1; done
+sleep 1.5                    # the fourth accept() fails, and fails again after the 1 s back-off
 ss -tan 'sport = :9005'
+grep 'accept()' /tmp/emfile.log | tail -n 4
+kill $server
 ```
 
 ```text
 State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
 LISTEN 2      16         127.0.0.1:9005      0.0.0.0:*
-ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62550
-ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62540
-ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62570
-ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62546
-ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62562
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:63714
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:63674
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:63690
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:63702
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:63716
 ```
 
 The server's last lines of output, from the same run:
 
 ```text
-accept() = fd 6 from port 62546, O_NONBLOCK, added to epoll
-accept() = fd 7 from port 62550, O_NONBLOCK, added to epoll
+accept() = EAGAIN (accept queue empty)
+accept() = fd 7 from port 63702, O_NONBLOCK, added to epoll
 accept() = EMFILE (no free fd; the connection stays queued)
 accept() = EMFILE (no free fd; the connection stays queued)
 ```
 
-Eight slots: 0, 1 and 2 are stdio, 3 is the listener and 4 is the epoll instance, which leaves 5, 6 and 7 for clients. The fourth `accept4()` fails with `EMFILE`, and `ss` shows the two connections that could not get an fd still sitting in the accept queue (`Recv-Q 2`): five `ESTAB` rows on the server side, three of them owned by fds 5–7 and two (ports 62562 and 62570) by nobody yet. From those clients' side nothing is wrong: their `connect()` succeeded and their bytes were accepted by the kernel. The `EMFILE` line repeats once per second because the demo backs off; without the `time.sleep(1.0)` in `accept_all()`, level-triggered epoll would report the listener readable on every iteration, and the loop would spin at full speed.
+Eight slots: 0, 1 and 2 are stdio, 3 is the listener and 4 is the epoll instance, which leaves 5, 6 and 7 for clients. The fourth `accept4()` fails with `EMFILE`, and `ss` shows the two connections that could not get an fd still sitting in the accept queue (`Recv-Q 2`): five `ESTAB` rows on the server side, three of them owned by fds 5–7 and two by nobody yet. From those clients' side nothing is wrong: their `connect()` succeeded and their bytes were accepted by the kernel. The `EMFILE` line repeats once per second because the demo backs off; without the `time.sleep(1.0)` in `accept_all()`, level-triggered epoll would report the listener readable on every iteration, and the loop would spin at full speed.
 
 ### Reproduce
 
