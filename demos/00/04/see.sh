@@ -31,9 +31,11 @@ see_sh() { see_log "\$ $1"; see_log "$(bash -c "$1" 2>&1)"; }
 see_log "# kernel $(uname -r)"
 
 see_log "## 1. the limits"
-see_run sysctl net.core.somaxconn net.ipv4.tcp_max_syn_backlog net.ipv4.tcp_syncookies \
+# -e: skip keys an older kernel lacks (tcp_tw_reuse_delay is recent).
+see_run sysctl -e net.core.somaxconn net.ipv4.tcp_max_syn_backlog net.ipv4.tcp_syncookies \
   net.ipv4.tcp_syn_linear_timeouts net.ipv4.tcp_abort_on_overflow \
-  net.ipv4.ip_local_port_range net.ipv4.tcp_tw_reuse net.ipv4.tcp_max_tw_buckets
+  net.ipv4.ip_local_port_range net.ipv4.tcp_tw_reuse net.ipv4.tcp_tw_reuse_delay \
+  net.ipv4.tcp_max_tw_buckets
 
 see_log "## 2. listen(4), never accept(), 8 clients"
 nstat -n

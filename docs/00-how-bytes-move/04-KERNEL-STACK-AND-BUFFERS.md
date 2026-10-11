@@ -316,7 +316,7 @@ The RFC asks for twice the maximum segment lifetime (2 MSL). Linux does not comp
 
 A server's TIME_WAIT sockets all share its listening port, and each is distinguished by the client's address and port, so they cost a few hundred bytes of memory each and nothing else. The client side is different. Every outgoing `connect()` without an explicit `bind()` gets a source port from `net.ipv4.ip_local_port_range`, chosen with a per-destination offset (the RFC 6056 approach). The 4-tuple must be unique, and a port whose last connection to that destination is still in TIME_WAIT is not reusable for 60 seconds unless `tcp_tw_reuse` allows it.
 
-The lab's range is `55000 65535`: 10,536 ports. That is Docker Desktop's setting, narrower than Linux's default of 32768–60999. If a client closes first and opens new connections to the same server address and port, it can sustain at most about 10,536 / 60 ≈ 175 new connections per second before `connect()` fails with `EADDRNOTAVAIL` ("Cannot assign requested address"). `net.ipv4.tcp_tw_reuse` is 2 in the lab, which means "allow reuse of TIME_WAIT ports, but only for loopback traffic"; 1 allows it everywhere for connections that use TCP timestamps; 0 forbids it.
+The lab's range is `55000 65535`: 10,536 ports. That is Docker Desktop's setting, narrower than Linux's default of 32768–60999. Whether TIME_WAIT pins those ports depends on `net.ipv4.tcp_tw_reuse` (ip-sysctl.rst): 0 forbids reusing a TIME_WAIT port for a new outgoing connection, 1 allows it for connections that use TCP timestamps once the old connection's last timestamp is `tcp_tw_reuse_delay` old (1000 ms in the lab), and 2, the lab's setting and Linux's default, allows it the same way but only for loopback traffic. So on this lab, connections to `127.0.0.1` recycle their ports after about a second; connections to any other address do not. Where reuse does not apply, a client that closes first and opens new connections to the same server address and port can sustain at most about 10,536 / 60 ≈ 175 new connections per second before `connect()` fails with `EADDRNOTAVAIL` ("Cannot assign requested address").
 
 Note the shape of that limit: it is per destination `ip:port`, not global. The same client can hold 10,536 connections to each of many servers, because each destination makes a different 4-tuple. That is why the usual fixes are "talk to more addresses" (several upstream IPs, or several local source IPs) and, far better, "open fewer connections".
 
@@ -327,14 +327,16 @@ Since TIME_WAIT lands on the active closer, protocols choose who closes. HTTP/1.
 TIME_WAIT has a sibling worth recognising: `FIN_WAIT_2` is the active closer waiting for the peer's FIN after its own was ACKed. If the peer never closes its half, `net.ipv4.tcp_fin_timeout` (60 s by default) bounds that wait for orphaned sockets. Like `CLOSE_WAIT` on the other side, a crowd of `FIN_WAIT_2` sockets points at a peer application that is not closing.
 
 ```
-TICKETING EXAMPLE: In Module 5, nginx sits in front of `ticketing api`. If its
-upstream block has no `keepalive`, nginx opens a new connection to
-127.0.0.1:8080 for every request and closes it afterwards, so nginx is the
-active closer and every upstream connection leaves a TIME_WAIT entry holding
-one of 10,536 ephemeral ports for 60 s. Past roughly 175 requests per second
-to that one upstream, nginx's connect() starts failing with EADDRNOTAVAIL and
-clients see 502s, while the API is idle. The fix is reuse, not a sysctl:
-upstream keep-alive (lessons 1.3 and 5.6) and connection pools (lesson 6.3).
+TICKETING EXAMPLE: In Module 5, nginx runs in its own container in front of
+`ticketing api` at 172.18.0.3:8080 on the compose network. If its upstream
+block has no `keepalive`, nginx opens a new connection for every request and
+closes it afterwards, so nginx is the active closer and every upstream
+connection leaves a TIME_WAIT entry. With tcp_tw_reuse=2, reuse covers only
+loopback, so each entry holds one of 10,536 ephemeral ports for 60 s. Past
+roughly 175 requests per second to that one upstream, nginx's connect()
+starts failing with EADDRNOTAVAIL and clients see 502s, while the API is
+idle. The fix is reuse, not a sysctl: upstream keep-alive (lessons 1.3 and
+5.6) and connection pools (lesson 6.3).
 ```
 
 ---
@@ -580,9 +582,10 @@ Every capture below comes from one run of `just see 00/04` in the lab, on kernel
 ### 8.1 sysctl — the limits this lesson is about
 
 ```bash
-sysctl net.core.somaxconn net.ipv4.tcp_max_syn_backlog net.ipv4.tcp_syncookies \
+sysctl -e net.core.somaxconn net.ipv4.tcp_max_syn_backlog net.ipv4.tcp_syncookies \
   net.ipv4.tcp_syn_linear_timeouts net.ipv4.tcp_abort_on_overflow \
-  net.ipv4.ip_local_port_range net.ipv4.tcp_tw_reuse net.ipv4.tcp_max_tw_buckets
+  net.ipv4.ip_local_port_range net.ipv4.tcp_tw_reuse net.ipv4.tcp_tw_reuse_delay \
+  net.ipv4.tcp_max_tw_buckets
 ```
 
 ```text
@@ -593,10 +596,11 @@ net.ipv4.tcp_syn_linear_timeouts = 4
 net.ipv4.tcp_abort_on_overflow = 0
 net.ipv4.ip_local_port_range = 55000	65535
 net.ipv4.tcp_tw_reuse = 2
+net.ipv4.tcp_tw_reuse_delay = 1000
 net.ipv4.tcp_max_tw_buckets = 32768
 ```
 
-Every number in sections 2 and 4 is here: `somaxconn` caps any backlog at 4096, SYN cookies are on (so `tcp_max_syn_backlog` is dormant), an overflow on the final ACK is ignored rather than reset, SYN retries stay linear for four attempts, and clients have only 10,536 ephemeral ports. `/proc/sys` is read-only inside the lab container, so you can read these but not change them there.
+Every number in sections 2 and 4 is here: `somaxconn` caps any backlog at 4096, SYN cookies are on (so `tcp_max_syn_backlog` is dormant), an overflow on the final ACK is ignored rather than reset, SYN retries stay linear for four attempts, and clients have only 10,536 ephemeral ports, which TIME_WAIT pins for 60 s except on loopback, where `tcp_tw_reuse = 2` lets a port be reused after `tcp_tw_reuse_delay` (1000 ms). `sysctl -e` skips any key an older kernel does not have. `/proc/sys` is read-only inside the lab container, so you can read these but not change them there.
 
 ### 8.2 ss -lnt — the accept queue's depth and limit
 
@@ -755,7 +759,7 @@ just see 00/04
 ### TIME_WAIT is a timer you asked for by closing first
 
 > [!WARNING]
-> **Reality check (time-wait-is-not-a-leak) —** A socket in `TIME_WAIT` is not an unclosed resource. It is a small `tcp_timewait_sock` with no buffers and no file descriptor, kept for `TCP_TIMEWAIT_LEN` (a fixed 60 s on Linux, no sysctl) by the side that closed first, so that a lost final ACK can be re-ACKed and delayed segments from the old connection cannot corrupt a new one with the same 4-tuple (RFC 9293, RFC 1337). The See It's server closed first and got eight of them, each showing `timer:(timewait,59sec,0)`, and they expire by themselves. Server-side TIME_WAIT is nearly free: every entry shares the listening port. Client-side TIME_WAIT is what hurts, because it pins an ephemeral port per destination: with the lab's `ip_local_port_range` of 55000–65535 (10,536 ports), a client that closes first can open only about 175 new connections per second to one `ip:port` before `connect()` returns `EADDRNOTAVAIL`. Watch for it with `ss -tan state time-wait | wc -l` grouped by destination. The fixes are architectural: reuse connections (HTTP keep-alive, lesson 1.3; nginx upstream `keepalive`, lesson 5.6; connection pools, lesson 6.3), spread load over more destination addresses, and use `SO_REUSEADDR` on listeners so a restart can rebind (the demo does). `tcp_tw_reuse` (2 here: loopback only) helps clients that use TCP timestamps; never reach for `tcp_tw_recycle`, which broke clients behind NAT and was removed in Linux 4.12. And if you see thousands of `CLOSE_WAIT` instead, that one *is* a leak: your application received a FIN and never called `close()`.
+> **Reality check (time-wait-is-not-a-leak) —** A socket in `TIME_WAIT` is not an unclosed resource. It is a small `tcp_timewait_sock` with no buffers and no file descriptor, kept for `TCP_TIMEWAIT_LEN` (a fixed 60 s on Linux, no sysctl) by the side that closed first, so that a lost final ACK can be re-ACKed and delayed segments from the old connection cannot corrupt a new one with the same 4-tuple (RFC 9293, RFC 1337). The See It's server closed first and got eight of them, each showing `timer:(timewait,59sec,0)`, and they expire by themselves. Server-side TIME_WAIT is nearly free: every entry shares the listening port. Client-side TIME_WAIT is what hurts, because it pins an ephemeral port per destination: with the lab's `ip_local_port_range` of 55000–65535 (10,536 ports), a client that closes first can open only about 175 new connections per second to one non-loopback `ip:port` before `connect()` returns `EADDRNOTAVAIL` (with the lab's `tcp_tw_reuse = 2`, loopback destinations reuse TIME_WAIT ports after `tcp_tw_reuse_delay`, 1 s). Watch for it with `ss -tan state time-wait | wc -l` grouped by destination. The fixes are architectural: reuse connections (HTTP keep-alive, lesson 1.3; nginx upstream `keepalive`, lesson 5.6; connection pools, lesson 6.3), spread load over more destination addresses, and use `SO_REUSEADDR` on listeners so a restart can rebind (the demo does). `tcp_tw_reuse` (2 here: loopback only) helps clients that use TCP timestamps; never reach for `tcp_tw_recycle`, which broke clients behind NAT and was removed in Linux 4.12. And if you see thousands of `CLOSE_WAIT` instead, that one *is* a leak: your application received a FIN and never called `close()`.
 
 ---
 
@@ -787,7 +791,7 @@ just see 00/04
 | `sk_buff` | Metadata plus a data buffer; layers move `data`/`tail` instead of copying; sockets are charged `truesize` |
 | Socket buffers | `sk_rcvbuf`/`sk_sndbuf` are byte budgets; autotuning sizes them unless `SO_RCVBUF`/`SO_SNDBUF` locks (and doubles) them |
 | TIME_WAIT | The active closer keeps the 4-tuple for 60 s (`TCP_TIMEWAIT_LEN`) to absorb late segments and re-ACK a lost FIN |
-| Ephemeral ports | Client-side TIME_WAIT pins ports per destination; 10,536 ports / 60 s ≈ 175 new connections per second in the lab |
+| Ephemeral ports | Client-side TIME_WAIT pins ports per destination; 10,536 ports / 60 s ≈ 175 new connections per second to a non-loopback destination in the lab, where `tcp_tw_reuse = 2` recycles only loopback ports |
 | Runtime defaults | asyncio backlog 100, Go `somaxconn`, Rust std 128: choose the number yourself |
 
 ---
