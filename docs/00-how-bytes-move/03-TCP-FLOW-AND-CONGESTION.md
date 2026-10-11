@@ -581,8 +581,10 @@ Start the slow reader (4 KiB `SO_RCVBUF`, 1 KiB every 100 ms) for 5 seconds, and
 ```bash
 python3 demos/00/03/python/main.py --seconds 5 &
 sleep 2
-timeout 2 tcpdump -l -i lo -nn 'tcp port 9003' | head -n 8
+timeout 2 tcpdump -l -i lo -nn -c 8 'tcp port 9003'
 ```
+
+(tcpdump also prints a `listening on lo` banner and a packet summary on stderr; `see.sh` filters those two lines out and keeps any error.)
 
 ```text
 22:19:42.840150 IP 127.0.0.1.9003 > 127.0.0.1.56716: Flags [.], ack 198037243, win 64, options [nop,nop,TS val 4057999724 ecr 3892569257], length 0
@@ -661,7 +663,7 @@ TcpExtTCPToZeroWindowAdv        10                 0.0
 TcpExtTCPWinProbe               8                  0.0
 ```
 
-The sender's kernel accepted 1,769,472 bytes (27 full 64 KiB chunks) in the first instant, and then one `send()` call slept for the remaining 5.1 seconds: `send-blocked` grows by a second per second while `sent` never moves. The reader got its 10 KiB/s throughout. `in-kernel` at `t=3s`, 1,737,728 bytes, is the same order as `ss`'s Send-Q (1,796,096) plus Recv-Q (6,144) in section 8.2, and the gap shows why it is only an estimate: `Send-Q` alone is 26,624 bytes larger than `sent` (1,769,472), because the `send()` call that is still blocked had already copied that much of its 64 KiB chunk into the kernel, and `sent` is updated only when the call returns. The two were also sampled at different instants by different processes. Nothing in either output is a drop or an error.
+The sender's kernel accepted 1,769,472 bytes (27 full 64 KiB chunks) in the first instant, and then one `send()` call slept for the remaining 5.1 seconds: `send-blocked` grows by a second per second while `sent` never moves. The reader got its 10 KiB/s throughout. `in-kernel` at `t=3s`, 1,737,728 bytes, is the same order as `ss`'s Send-Q (1,796,096) plus Recv-Q (6,144) in section 8.2, but the two cannot be reconciled to the byte, and they are not meant to be. `sent` counts only `send()` calls that have returned, so whatever the still-blocked call has already handed the kernel is in `Send-Q` and not in `sent`. `Send-Q` is `write_seq − snd_una` (`tcp_diag_get_info()` in `net/ipv4/tcp_diag.c`), so bytes the reader has acknowledged have already left it, while `sent` and `read` keep counting them. And the two excerpts were sampled at different instants by different processes. Read them as two views of the same pile-up: about 1.7 MB waiting in kernel buffers, nothing dropped. Nothing in either output is a drop or an error.
 
 The counters tell the same story from inside the stack: the reader's socket went to a zero window 10 times (`TCPToZeroWindowAdv`) and back 10 times (`TCPFromZeroWindowAdv`), and the sender sent 8 window probes (`TCPWinProbe`, incremented in `tcp_xmit_probe_skb()`).
 
