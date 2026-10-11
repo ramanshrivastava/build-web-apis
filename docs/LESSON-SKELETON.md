@@ -288,7 +288,7 @@ Links are file-relative, the way GitHub renders them. From a lesson in `docs/01-
 ### Next / Previous / Module Overview (linted: present and resolving)
 
 - **Next**: the next lesson (`./02-….md`). The last lesson of a module links to the next module's overview (`../02-rest-done-properly/00-OVERVIEW.md`), and lesson 8.5 links to `../COURSE-OVERVIEW.md`.
-- **Previous**: the previous lesson. The first lesson of a module links to the previous module's last lesson (`../00-how-bytes-move/06-HOW-RUNTIMES-WRAP-SYSCALLS.md`), and lesson 0.1 links to `../COURSE-OVERVIEW.md`.
+- **Previous**: the previous lesson. The first lesson of a module links to its own module overview (`./00-OVERVIEW.md`).
 - **Module Overview**: `./00-OVERVIEW.md`.
 
 Because targets must exist, link the next lesson only once it exists. Until then, point Next at the module overview.
