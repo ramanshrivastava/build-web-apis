@@ -580,7 +580,7 @@ workers and every task queued on that worker waits.
 
 ## 8. See It: three runtimes over one epoll
 
-Everything below was captured in the lab on kernel 7.0.14-linuxkit (Docker Desktop's VM, aarch64) with Python 3.12.3, go1.23.12 and rustc 1.99.0, by one run of `just see 00/06`. Commands are shown as you would type them in `just lab` from `/work`. Three clients each connect, wait 0.2 s, send one line and hang up:
+Everything below was captured in the lab on kernel 7.0.14-linuxkit (Docker Desktop's VM, aarch64) with Python 3.12.3, go1.23.12 and rustc 1.99.0, by one run of `just see 00/06`, except 8.2 and 8.6, which say so. Commands are shown as you would type them in `just lab` from `/work`. Three clients each connect, wait 0.2 s, send one line and hang up:
 
 ```bash
 for n in 1 2 3; do (sleep 0.2; printf 'hello %s\n' "$n") | nc -N 127.0.0.1 9006; done
@@ -620,11 +620,15 @@ One thread, one pid on every line. Read it with Figure 2 beside it. asyncio's ac
 
 ```bash
 python3 demos/00/06/python/main.py >/dev/null &
-py-spy dump --pid $!
+pid=$!
+until ss -lnt 'sport = :9006' | grep -q LISTEN; do sleep 0.1; done
+sleep 0.5                    # let the loop settle into epoll_wait()
+py-spy dump --pid $pid
+kill $pid
 ```
 
 ```text
-Thread 46430 (idle): "MainThread"
+Thread 12654 (idle): "MainThread"
     select (selectors.py:468)
     _run_once (asyncio/base_events.py:1949)
     run_forever (asyncio/base_events.py:641)
@@ -635,7 +639,7 @@ Thread 46430 (idle): "MainThread"
     <module> (main.py:101)
 ```
 
-`py-spy` reads the interpreter's frames from outside the process, without stopping it for long and without debug symbols (it cannot attach to a process that is already being traced, which is why `see.sh` starts a second, untraced server for this step). The idle server sits in `select` at `selectors.py:468`, which in Ubuntu's Python 3.12.3 is the `fd_event_list = self._selector.poll(timeout, max_ev)` line shown in section 2.2, called from `_run_once` at `base_events.py:1949`, the `event_list = self._selector.select(timeout)` line, under `asyncio.run(run_forever(...))` at `main.py:96` and `sys.exit(main())` at `main.py:101` in the demo (this excerpt comes from a later `just see 00/06` run than 8.1, after the demo gained its `--buf-size` check). `(idle)` means the thread is off-CPU: inside `epoll_pwait()`, with the GIL released, because `select.epoll.poll()` wraps its syscall in `Py_BEGIN_ALLOW_THREADS` too.
+`py-spy` reads the interpreter's frames from outside the process, without stopping it for long and without debug symbols (it cannot attach to a process that is already being traced, which is why `see.sh` starts a second, untraced server for this step). The idle server sits in `select` at `selectors.py:468`, which in Ubuntu's Python 3.12.3 is the `fd_event_list = self._selector.poll(timeout, max_ev)` line shown in section 2.2, called from `_run_once` at `base_events.py:1949`, the `event_list = self._selector.select(timeout)` line, under `asyncio.run(run_forever(...))` at `main.py:96` and `sys.exit(main())` at `main.py:101` in the demo (this excerpt comes from running the block above, a later run than 8.1). `(idle)` means the thread is off-CPU: inside `epoll_pwait()`, with the GIL released, because `select.epoll.poll()` wraps its syscall in `Py_BEGIN_ALLOW_THREADS` too.
 
 ### 8.3 GODEBUG=schedtrace and /proc — goroutines on a few threads
 
@@ -684,7 +688,11 @@ This is Figure 3, line for line. Thread 13435 accepts fd 4 with `SOCK_NONBLOCK` 
 ```bash
 cargo build --release --manifest-path demos/00/06/rust/Cargo.toml
 /root/.cache/cargo-target/release/demo-00-06 >/dev/null &
-grep Threads /proc/$!/status; cat /proc/$!/task/*/comm | sort | uniq -c
+pid=$!
+until ss -lnt 'sport = :9006' | grep -q LISTEN; do sleep 0.1; done
+sleep 0.5                    # let tokio finish starting its workers
+grep Threads /proc/$pid/status; cat /proc/$pid/task/*/comm | sort | uniq -c
+kill $pid
 ```
 
 ```text
@@ -718,35 +726,63 @@ The acceptor task (thread 13676) takes fd 7 with `SOCK_NONBLOCK`. The worker hol
 
 ### 8.6 /proc and ss — what an idle connection costs, and each runtime's backlog
 
+The block runs each server in turn: Python, Go, Go again with `--buf-size 4096` (`go-4k`), then tokio. For each one it reads the listener's backlog, holds 2,000 idle connections open from a second Python process, samples `VmRSS` 4 seconds after the 2,000th connection so the allocators have settled, and prints one summary line, the same line `see.sh` prints:
+
 ```bash
-python3 demos/00/06/python/main.py >/dev/null &     # then the Go binary, the Go binary with
-pid=$!                                              # --buf-size 4096, then the tokio binary
-ss -lntH 'sport = :9006' | awk '{print $3}'         # Send-Q of a listener = its backlog
-awk '/VmRSS/ {print $2}' /proc/$pid/status
-python3 -c '
+go build -o /tmp/echo-goroutines demos/00/06/go/main.go
+cargo build --release --manifest-path demos/00/06/rust/Cargo.toml
+for run in python go go-4k rust; do
+  case $run in
+    python) python3 demos/00/06/python/main.py >/dev/null & ;;
+    go) /tmp/echo-goroutines >/dev/null & ;;
+    go-4k) /tmp/echo-goroutines --buf-size 4096 >/dev/null & ;;
+    rust) /root/.cache/cargo-target/release/demo-00-06 >/dev/null & ;;
+  esac
+  pid=$!
+  until ss -lnt 'sport = :9006' | grep -q LISTEN; do sleep 0.1; done
+  sleep 0.5
+  backlog=$(ss -lntH 'sport = :9006' | awk '{print $3}')    # a listener's Send-Q is its backlog
+  before=$(awk '/VmRSS/ {print $2}' /proc/$pid/status)
+  python3 -c '
 import socket, time
 conns = []
 for i in range(2000):
     conns.append(socket.create_connection(("127.0.0.1", 9006)))
     if i % 50 == 0:
-        time.sleep(0.01)
-time.sleep(30)' &
-ss -tnH state established '( sport = :9006 )' | wc -l   # wait until it reads 2000, then 4 s more
-awk '/VmRSS|Threads/ {print $1, $2}' /proc/$pid/status
+        time.sleep(0.01)  # paced, so asyncio'"'"'s accept queue of 100 never overflows
+time.sleep(120)' &
+  holder=$!
+  until [ "$(ss -tnH state established '( sport = :9006 )' | wc -l)" -ge 2000 ]; do
+    kill -0 $holder 2>/dev/null || break   # the client died: its error is printed above
+    sleep 0.2
+  done
+  sleep 4                                  # let the allocator settle before sampling
+  n=$(ss -tnH state established '( sport = :9006 )' | wc -l)
+  after=$(awk '/VmRSS/ {print $2}' /proc/$pid/status)
+  if [ "$n" -ge 2000 ]; then
+    echo "$run: listen backlog $backlog; $n idle connections: VmRSS $before -> $after kB" \
+      "(+$(( (after - before) * 1024 / n )) bytes each), $(awk '/Threads/ {print $2}' /proc/$pid/status) threads"
+  else
+    echo "$run: FAILED, only $n of 2000 connections were established"
+  fi
+  kill $holder $pid
+  wait 2>/dev/null
+  sleep 0.5
+done
 ```
 
-`see.sh` runs these steps for each server in turn, samples `VmRSS` 4 seconds after the 2,000th connection so the allocators have settled, and prints one summary line per server. The Go server runs twice: with its default 64 KiB per-connection buffer, and with `--buf-size 4096` (`go-4k`). This table comes from a later run of `just see 00/06` than the rest of this section, made after the `--buf-size` flag was added:
+This table comes from a later run than the rest of this section, made by running the block as printed:
 
 ```text
-python: listen backlog 100; 2000 idle connections: VmRSS 20040 -> 31628 kB (+5933 bytes each), 1 threads
-go: listen backlog 4096; 2000 idle connections: VmRSS 5692 -> 121636 kB (+59363 bytes each), 10 threads
-go-4k: listen backlog 4096; 2000 idle connections: VmRSS 5708 -> 21580 kB (+8126 bytes each), 8 threads
-rust: listen backlog 128; 2000 idle connections: VmRSS 2432 -> 20560 kB (+9281 bytes each), 15 threads
+python: listen backlog 100; 2000 idle connections: VmRSS 20052 -> 31620 kB (+5922 bytes each), 1 threads
+go: listen backlog 4096; 2000 idle connections: VmRSS 5696 -> 134772 kB (+66086 bytes each), 13 threads
+go-4k: listen backlog 4096; 2000 idle connections: VmRSS 5840 -> 21616 kB (+8077 bytes each), 10 threads
+rust: listen backlog 128; 2000 idle connections: VmRSS 2428 -> 20680 kB (+9345 bytes each), 15 threads
 ```
 
 Two findings, both runtime defaults rather than code. First, the backlogs: asyncio's 100, Go's 4096 (it reads `somaxconn`), tokio's 128. The client paces itself (a 10 ms pause every 50 connections) precisely because asyncio's accept queue of 100 overflows otherwise; an earlier unpaced attempt took 16 s to get 5,000 connections into the Python server, as the dropped SYNs waited out lesson 0.4's 1 s retransmit timer. Second, the cost per idle connection, computed as total RSS growth divided by connections. That includes everything the runtime grew to accommodate the burst (heap arenas, new threads, a larger fd table), so treat each line as one sample, not a per-object size: about 6 KB for an asyncio connection (transport, protocol, `StreamReader`, task and coroutine objects) and about 9 KB for a tokio task with its `ScheduledIo` and buffer, both stable from run to run.
 
-The Go pair is the interesting one. With 4 KiB buffers the measured RSS growth was about 8 KB per connection (8,126 bytes), which covers everything the connection added: the goroutine's stack, its `netFD` and `pollDesc`, the 4 KiB buffer, and the runtime's share of heap and thread growth. With the default `make([]byte, 65536)` the same server costs 59 KB per connection, almost all of it the buffer, which the allocator has had to zero and therefore made resident. The 64 KiB figure is the one that moves between runs: earlier runs that sampled one second after the last connection printed 15 to 34 KB, and runs sampled after a few seconds printed 45 to 66 KB (66 KB is the whole 64 KiB buffer plus the goroutine), depending on how far the allocator had got with those 2,000 large allocations. The 4 KiB figure did not move. So the per-connection buffer is the dominant term: the same server grows about 8 KB per connection with 4 KiB buffers and 45 to 66 KB with 64 KiB ones. This run does not isolate the goroutine's own share of the 8 KB. Go also grew from 6 OS threads at rest (section 8.3) to 8–10 in this run (12 to 17 in later runs) while the burst arrived; the threads track bursts of runnable goroutines, not the 2,000 parked ones.
+The Go pair is the interesting one. With 4 KiB buffers the measured RSS growth was about 8 KB per connection (8,077 bytes), which covers everything the connection added: the goroutine's stack, its `netFD` and `pollDesc`, the 4 KiB buffer, and the runtime's share of heap and thread growth. With the default `make([]byte, 65536)` the same server costs 66 KB per connection: the whole 64 KiB buffer, which the allocator has had to zero and therefore made resident, plus the goroutine. Over five runs of this block and one of `see.sh`, the 64 KiB figure ranged from 63 to 68 KB and the 4 KiB figure from 8.1 to 9.3 KB (the 9.3 KB run had also grown to 15 threads). The 4 s wait matters: earlier runs that sampled one second after the last connection printed 15 to 34 KB for the 64 KiB server, because the allocator had not yet made all 2,000 large buffers resident. So the per-connection buffer is the dominant term: the same server grows about 8 KB per connection with 4 KiB buffers and about 65 KB with 64 KiB ones. This run does not isolate the goroutine's own share of the 8 KB. Go also grew from 6 OS threads at rest (section 8.3) to 13 and 10 in this run (8 to 16 over those six runs) while the burst arrived; the threads track bursts of runnable goroutines, not the 2,000 parked ones.
 
 ### 8.7 A two-thread probe — the GIL is released around blocking socket calls
 
@@ -807,7 +843,7 @@ just see 00/06
 ### One goroutine per connection is cheap, not free
 
 > [!WARNING]
-> **Reality check (goroutines-are-not-free) —** A goroutine starts with a small stack (`stackMin = 2048` in `src/runtime/stack.go`, grown by copying), which is why one per connection is a sane design where one thread per connection is not. In this lab the measured per-connection RSS growth with a 4 KiB read buffer was about 8 KB (section 8.6: 8,126 bytes with `--buf-size 4096`), which includes the goroutine's stack, the runtime's `netFD` and `pollDesc` for the socket, the buffer itself and the runtime's own growth. The trap is what you hand it: the demo's handler allocates `make([]byte, 65536)` before its first `Read`, and with that buffer the same server measured 59 KB per idle connection in the same run (45 to 66 KB across runs, once the allocator settled). The buffer, not the goroutine, is most of the cost. At those rates 100,000 idle connections, a modest number for the seat-map WebSocket in lesson 3.4, is about 0.8 GB with small buffers and 4.5 to 6.6 GB with 64 KiB ones, before any request does work. The OS threads grew too, from 6 to between 8 and 17 while the connections arrived. The same arithmetic applies to the others (about 6 KB per asyncio connection and 9 KB per tokio task here), so the lesson is not "Go is heavy" but "per-connection memory is a capacity number, set mostly by your buffers, that you must measure". You can see it with `/proc/<pid>/status` (`VmRSS`, `Threads`), `GODEBUG=schedtrace=1000`, and, in lesson 6.2, `go tool pprof` heap profiles, where the 64 KiB allocations show up under `handle`. What to do: size read buffers to the protocol (4 KiB holds most HTTP request heads), allocate them only once a connection has bytes to read or borrow them from a `sync.Pool` for the duration of a read, cap concurrent connections at the edge (lesson 7.4's load shedding), and remember that the runtime adds OS threads whenever goroutines block in syscalls the netpoller does not cover, such as file I/O and cgo.
+> **Reality check (goroutines-are-not-free) —** A goroutine starts with a small stack (`stackMin = 2048` in `src/runtime/stack.go`, grown by copying), which is why one per connection is a sane design where one thread per connection is not. In this lab the measured per-connection RSS growth with a 4 KiB read buffer was about 8 KB (section 8.6: 8,077 bytes with `--buf-size 4096`), which includes the goroutine's stack, the runtime's `netFD` and `pollDesc` for the socket, the buffer itself and the runtime's own growth. The trap is what you hand it: the demo's handler allocates `make([]byte, 65536)` before its first `Read`, and with that buffer the same server measured 66 KB per idle connection in the same run (63 to 68 KB across runs, once the allocator settled). The buffer, not the goroutine, is most of the cost. At those rates 100,000 idle connections, a modest number for the seat-map WebSocket in lesson 3.4, is about 0.8 GB with small buffers and 6.3 to 6.8 GB with 64 KiB ones, before any request does work. The OS threads grew too, from 6 to between 8 and 16 while the connections arrived. The same arithmetic applies to the others (about 6 KB per asyncio connection and 9 KB per tokio task here), so the lesson is not "Go is heavy" but "per-connection memory is a capacity number, set mostly by your buffers, that you must measure". You can see it with `/proc/<pid>/status` (`VmRSS`, `Threads`), `GODEBUG=schedtrace=1000`, and, in lesson 6.2, `go tool pprof` heap profiles, where the 64 KiB allocations show up under `handle`. What to do: size read buffers to the protocol (4 KiB holds most HTTP request heads), allocate them only once a connection has bytes to read or borrow them from a `sync.Pool` for the duration of a read, cap concurrent connections at the edge (lesson 7.4's load shedding), and remember that the runtime adds OS threads whenever goroutines block in syscalls the netpoller does not cover, such as file I/O and cgo.
 
 ---
 
