@@ -577,7 +577,7 @@ backlog explicitly, and raise somaxconn if needed.
 
 ## 8. See It: Queues That Fill While Nobody Calls accept()
 
-Every capture below comes from one run of `just see 00/04` in the lab, on kernel 7.0.14-linuxkit (Docker Desktop's VM, aarch64). Inside the lab you are root in `/work`, so the commands work as shown. Run the demo in the background (or in a second `just lab` shell) and look at it from the kernel's side.
+Every capture below comes from one run of `just see 00/04` in the lab, on kernel 7.0.14-linuxkit (Docker Desktop's VM, aarch64), except 8.4, which comes from a later run of its own block, so its port numbers differ. Inside the lab you are root in `/work`, so the commands work as shown. Run the demo in the background (or in a second `just lab` shell) and look at it from the kernel's side.
 
 ### 8.1 sysctl — the limits this lesson is about
 
@@ -649,19 +649,24 @@ The first block is the client side of clients 6, 7 and 8, still in `SYN-SENT`; S
 
 ### 8.4 /proc/net/tcp — the same sockets, raw
 
+This block starts its own neveraccept and prints three rows of the raw table: the listener and both ends of one queued connection. The first pass of `awk` finds the first established connection to port 9004 (local port `:232C`, state `01`) and remembers its client address; the second pass prints the header, the listener and the two rows with that address.
+
 ```bash
-head -n 1 /proc/net/tcp; grep -i ':232C ' /proc/net/tcp | head -n 4
+python3 demos/00/04/python/main.py --hold 3 >/dev/null &
+sleep 1
+awk 'NR == FNR { if ($2 ~ /:232C$/ && $4 == "01" && !c) c = $3; next }
+     FNR == 1 || $2 == c || ($2 ~ /:232C$/ && ($3 == "00000000:0000" || $3 == c))' /proc/net/tcp /proc/net/tcp
+wait
 ```
 
 ```text
   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
-   9: 0100007F:232C 00000000:0000 0A 00000000:00000005 00:00000000 00000000     0        0 39446178 6 00000000576518b7 100 0 0 10 0
-  11: 0100007F:232C 0100007F:FAC0 01 00000000:00000000 00:00000000 00000000     0        0 0 1 00000000db313efe 20 0 0 10 -1
-  12: 0100007F:FABA 0100007F:232C 01 00000000:00000000 00:00000000 00000000     0        0 39446179 1 000000005cd992c2 20 0 0 10 -1
-  13: 0100007F:FAC0 0100007F:232C 01 00000000:00000000 00:00000000 00000000     0        0 39446180 1 0000000084d38f24 20 0 0 10 -1
+   9: 0100007F:232C 00000000:0000 0A 00000000:00000005 00:00000000 00000000     0        0 41063476 6 00000000f438fbc0 100 0 0 10 0
+  13: 0100007F:DAA0 0100007F:232C 01 00000000:00000000 00:00000000 00000000     0        0 41063480 2 000000001f560247 20 0 0 10 -1
+  18: 0100007F:232C 0100007F:DAA0 01 00000000:00000000 00:00000000 00000000     0        0 0 1 00000000fa272731 20 0 0 10 -1
 ```
 
-This is the table `ss` decodes, in hexadecimal. `0100007F:232C` is 127.0.0.1 (little-endian bytes) port 0x232C = 9004. `st` is the TCP state: `0A` is `LISTEN`, `01` is `ESTABLISHED`. For the listener, `get_tcp4_sock()` in net/ipv4/tcp_ipv4.c puts `sk_ack_backlog` in the `rx_queue` field, so `00000005` is the same 5 that `ss` showed. Now compare rows 11 and 13: they are the two ends of one connection (port 0xFAC0 = 64192). The client end (row 13) has inode 39446180, a real socket file. The server end (row 11) has inode **0**: it is a complete TCP connection with no file and no descriptor yet. That file is exactly what `accept()` creates.
+This is the table `ss` decodes, in hexadecimal. `0100007F:232C` is 127.0.0.1 (little-endian bytes) port 0x232C = 9004. `st` is the TCP state: `0A` is `LISTEN`, `01` is `ESTABLISHED`. For the listener, `get_tcp4_sock()` in net/ipv4/tcp_ipv4.c puts `sk_ack_backlog` in the `rx_queue` field, so `00000005` is the same 5 that `ss` showed. Now compare rows 13 and 18: they are the two ends of one connection (client port 0xDAA0 = 55968). The client end (row 13) has inode 41063480, a real socket file. The server end (row 18) has inode **0**: it is a complete TCP connection with no file and no descriptor yet. That file is exactly what `accept()` creates.
 
 ### 8.5 tcpdump — the dropped SYNs, every second
 
