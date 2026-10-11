@@ -76,10 +76,22 @@ fn describe_ipv4(packet: &[u8]) -> (String, Option<u16>) {
     if packet.len() < 20 {
         return ("short IPv4 header".into(), None);
     }
+    let version = packet[0] >> 4;
     let ihl = usize::from(packet[0] & 0x0f) * 4; // header length in 32-bit words
+    if version != 4 || ihl < 20 || packet.len() < ihl {
+        return ("malformed IPv4 header".into(), None);
+    }
     let proto = packet[9];
     let (src, dst) = (ipv4(&packet[12..16]), ipv4(&packet[16..20]));
     let name = ip_proto_name(proto);
+    let offset = usize::from(be16(packet, 6) & 0x1fff) * 8; // fragment offset, bytes
+    if offset != 0 {
+        // A later fragment carries payload bytes, not the TCP/UDP header.
+        return (
+            format!("{name} {src} > {dst} fragment at byte {offset}"),
+            None,
+        );
+    }
     if (proto == 6 || proto == 17) && packet.len() >= ihl + 4 {
         let (sport, dport) = (be16(packet, ihl), be16(packet, ihl + 2));
         return (format!("{name} {src}:{sport} > {dst}:{dport}"), Some(dport));
