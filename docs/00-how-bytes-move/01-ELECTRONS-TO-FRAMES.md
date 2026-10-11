@@ -435,17 +435,22 @@ def describe(frame: bytes, pkttype: int) -> tuple[str, int, int | None]:
 The frame arrives as a `bytes` object that starts at the destination MAC: the preamble, SFD and FCS never reach software (section 2). `unpack_from` reads the first 14 bytes; everything after them is the payload, whose meaning the EtherType decides. `len(frame)` is the same number `tcpdump` prints as `length`. Only when the EtherType is `0x0800` does the demo look inside, with `describe_ipv4()`:
 
 ```python
-    ihl = (packet[0] & 0x0F) * 4  # header length in 32-bit words
+    version, ihl = packet[0] >> 4, (packet[0] & 0x0F) * 4  # ihl: header length in 32-bit words
+    if version != 4 or ihl < 20 or len(packet) < ihl:
+        return "malformed IPv4 header", None
     proto = packet[9]
     src, dst = socket.inet_ntoa(packet[12:16]), socket.inet_ntoa(packet[16:20])
     name = IP_PROTOS.get(proto, f"proto {proto}")
+    offset = (struct.unpack_from("!H", packet, 6)[0] & 0x1FFF) * 8  # fragment offset, bytes
+    if offset:  # a later fragment carries payload bytes, not the TCP/UDP header
+        return f"{name} {src} > {dst} fragment at byte {offset}", None
     if proto in (6, 17) and len(packet) >= ihl + 4:
         sport, dport = struct.unpack_from("!HH", packet, ihl)
         return f"{name} {src}:{sport} > {dst}:{dport}", dport
     return f"{name} {src} > {dst}", None
 ```
 
-These offsets are RFC 791's IPv4 header: the low nibble of byte 0 is the header length in 32-bit words (5, so 20 bytes, without options), byte 9 is the protocol number, bytes 12–15 and 16–19 are the addresses. TCP and UDP both start with two 16-bit ports, so one `unpack_from` at offset `ihl` reads either. Lesson 0.2 builds a DNS packet with the same `struct` technique, in the other direction.
+These offsets are RFC 791's IPv4 header: the high nibble of byte 0 is the version (4), the low nibble is the header length in 32-bit words (5, so 20 bytes, without options), bytes 6–7 hold the flags and the 13-bit fragment offset in units of 8 bytes, byte 9 is the protocol number, and bytes 12–15 and 16–19 are the addresses. TCP and UDP both start with two 16-bit ports, so one `unpack_from` at offset `ihl` reads either, but only in the first fragment: the 2000-byte ping in section 4 leaves as a 1410-byte frame and a second frame whose IP payload starts at byte 1376 of the original datagram, and the 4 bytes at its `ihl` are ICMP data, not ports. A sniffer that skipped the offset check would print invented port numbers for every later fragment. Lesson 0.2 builds a DNS packet with the same `struct` technique, in the other direction.
 
 The receive loop itself is one call:
 

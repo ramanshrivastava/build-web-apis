@@ -36,10 +36,15 @@ def describe_ipv4(packet: bytes) -> tuple[str, int | None]:
     """One-line IPv4 summary, plus the UDP/TCP destination port if there is one."""
     if len(packet) < 20:
         return "short IPv4 header", None
-    ihl = (packet[0] & 0x0F) * 4  # header length in 32-bit words
+    version, ihl = packet[0] >> 4, (packet[0] & 0x0F) * 4  # ihl: header length in 32-bit words
+    if version != 4 or ihl < 20 or len(packet) < ihl:
+        return "malformed IPv4 header", None
     proto = packet[9]
     src, dst = socket.inet_ntoa(packet[12:16]), socket.inet_ntoa(packet[16:20])
     name = IP_PROTOS.get(proto, f"proto {proto}")
+    offset = (struct.unpack_from("!H", packet, 6)[0] & 0x1FFF) * 8  # fragment offset, bytes
+    if offset:  # a later fragment carries payload bytes, not the TCP/UDP header
+        return f"{name} {src} > {dst} fragment at byte {offset}", None
     if proto in (6, 17) and len(packet) >= ihl + 4:
         sport, dport = struct.unpack_from("!HH", packet, ihl)
         return f"{name} {src}:{sport} > {dst}:{dport}", dport
