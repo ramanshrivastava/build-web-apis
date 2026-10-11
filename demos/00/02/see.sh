@@ -20,8 +20,9 @@ require_tool ip tcpdump strace conntrack iptables python3
 demo="$SEE_ROOT/demos/00/02/python/main.py"
 cap="$(mktemp)"
 resolver="$(awk '$1 == "nameserver" && $2 !~ /:/ {print $2; exit}' /etc/resolv.conf)"
+owns_dnat=0 # set only after our "iptables -A" succeeded
 cleanup() {
-  $SUDO iptables -t nat -D OUTPUT -p udp -d 198.51.100.53 --dport 53 \
+  [ "$owns_dnat" = 1 ] && $SUDO iptables -t nat -D OUTPUT -p udp -d 198.51.100.53 --dport 53 \
     -j DNAT --to-destination "$resolver:53" 2>/dev/null || true
   rm -f "$cap"
   see_cleanup
@@ -42,12 +43,12 @@ see_sh "ip neigh show | grep -v FAILED | head -n 5"
 
 see_log "## 3. one query on the wire (ARP first, if the resolver is on a LAN)"
 filter="(arp and host $resolver) or udp port 53"
-$SUDO timeout 5 tcpdump -l -i any -nn -X "$filter" >"$cap" 2>/dev/null &
-tcpdump_pid=$!
+start_bg $SUDO timeout 5 tcpdump -l -i any -nn -X "$filter" >"$cap" 2>/dev/null
+tcpdump_pid=$SEE_BG_PID
 sleep 1
 if [ "$resolver_dev" != lo ]; then $SUDO ip neigh del "$resolver" dev "$resolver_dev" 2>/dev/null || true; fi
 see_run python3 "$demo" example.com
-wait "$tcpdump_pid" || true
+wait_bg "$tcpdump_pid" 10 || true
 see_log "\$ tcpdump -i any -nn -X '$filter'"
 see_log "$(head -n 20 "$cap")"
 
@@ -56,6 +57,7 @@ see_sh "strace -f -s 16 -e trace=socket,connect,sendto,recvfrom python3 $demo --
 
 see_log "## 5. NAT is state: DNAT 198.51.100.53 -> $resolver, then read conntrack"
 $SUDO iptables -t nat -A OUTPUT -p udp -d 198.51.100.53 --dport 53 -j DNAT --to-destination "$resolver:53"
+owns_dnat=1
 see_run iptables -t nat -S OUTPUT
 see_sh "python3 $demo --server 198.51.100.53 example.com | grep -E '^(dns|sendto|recvfrom|header)'"
 see_sh "conntrack -L -p udp --orig-dst 198.51.100.53 2>&1"
