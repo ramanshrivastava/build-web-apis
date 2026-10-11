@@ -300,6 +300,22 @@ func resolve(name, qtype, server string, port int, forceTCP bool) (header, []str
 	if err != nil {
 		return header{}, nil, err
 	}
+	h, answers, err := checkedReply(reply, id)
+	if err != nil {
+		return h, nil, err
+	}
+	if h.tc == 1 && !forceTCP {
+		fmt.Printf("truncated: the answer did not fit in %d bytes of UDP; retrying over TCP\n", udpLimit)
+		if reply, err = askTCP(server, port, query); err != nil {
+			return h, nil, err
+		}
+		return checkedReply(reply, id) // the TCP answer gets the same id check
+	}
+	return h, answers, nil
+}
+
+// checkedReply parses a reply and refuses it unless its id says it answers our query.
+func checkedReply(reply []byte, id uint16) (header, []string, error) {
 	h, answers, err := parseResponse(reply)
 	if err != nil {
 		return h, nil, err
@@ -308,16 +324,6 @@ func resolve(name, qtype, server string, port int, forceTCP bool) (header, []str
 		return h, nil, fmt.Errorf("reply id 0x%04x does not match query", h.id)
 	}
 	show(h, answers)
-	if h.tc == 1 && !forceTCP {
-		fmt.Printf("truncated: the answer did not fit in %d bytes of UDP; retrying over TCP\n", udpLimit)
-		if reply, err = askTCP(server, port, query); err != nil {
-			return h, nil, err
-		}
-		if h, answers, err = parseResponse(reply); err != nil {
-			return h, nil, err
-		}
-		show(h, answers)
-	}
 	return h, answers, nil
 }
 
