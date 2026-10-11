@@ -55,8 +55,11 @@ def serve_blocking(listener: socket.socket, max_clients: int) -> None:
             print(f"read({fd}) = {len(data)}", flush=True)
             if not data:
                 break
-            os.write(fd, data)
-            print(f"write({fd}) = {len(data)}", flush=True)
+            sent = 0
+            while sent < len(data):  # write() may take fewer bytes than asked: send the rest
+                n = os.write(fd, data[sent:])  # blocks while the send buffer is full
+                print(f"write({fd}) = {n}", flush=True)
+                sent += n
         conn.close()
         print(f"close({fd})", flush=True)
         served += 1
@@ -72,20 +75,36 @@ def serve_epoll(listener: socket.socket, max_clients: int) -> None:
         flush=True,
     )
     conns: dict[int, socket.socket] = {}  # keep the socket objects alive
+    pending: dict[int, bytes] = {}  # bytes read but not yet written back: the loop owes them
     served = 0
-    while max_clients == 0 or served < max_clients:
-        events = epoll.poll()  # epoll_wait(): sleep until some fd is ready
-        ready = ", ".join(f"fd {fd}" for fd, _ in events)
-        print(f"epoll_wait() = {len(events)} ready: {ready}", flush=True)
-        for fd, _ in events:
-            if fd == lfd:
-                accept_all(listener, epoll, conns)
-            elif echo_until_eagain(fd):
-                epoll.unregister(fd)
-                conns.pop(fd).close()
-                print(f"close({fd})", flush=True)
-                served += 1
-    epoll.close()
+    try:
+        while max_clients == 0 or served < max_clients:
+            events = epoll.poll()  # epoll_wait(): sleep until some fd is ready
+            ready = ", ".join(f"fd {fd}" for fd, _ in events)
+            print(f"epoll_wait() = {len(events)} ready: {ready}", flush=True)
+            for fd, _ in events:
+                if fd == lfd:
+                    accept_all(listener, epoll, conns)
+                    continue
+                try:
+                    if fd in pending:  # it watches EPOLLOUT until we have written what we owe
+                        closed = flush_pending(fd, pending, epoll)
+                    else:
+                        closed = echo_until_eagain(fd, pending, epoll)
+                except (ConnectionResetError, BrokenPipeError) as err:
+                    name = errno.errorcode.get(err.errno or 0, err.errno)
+                    print(f"fd {fd}: {name} ({err.strerror}); closing", flush=True)
+                    closed = True
+                if closed:
+                    epoll.unregister(fd)
+                    pending.pop(fd, None)
+                    conns.pop(fd).close()
+                    print(f"close({fd})", flush=True)
+                    served += 1
+    finally:
+        for conn in conns.values():  # a client still connected when the loop ends
+            conn.close()
+        epoll.close()
 
 
 def accept_all(listener: socket.socket, epoll: select.epoll, conns: dict) -> None:
@@ -104,13 +123,17 @@ def accept_all(listener: socket.socket, epoll: select.epoll, conns: dict) -> Non
             time.sleep(1.0)
             return
         fd = conn.fileno()
-        os.set_blocking(fd, False)
-        epoll.register(fd, select.EPOLLIN)
+        try:
+            os.set_blocking(fd, False)
+            epoll.register(fd, select.EPOLLIN)
+        except OSError:
+            conn.close()  # never leak an accepted fd we failed to set up
+            raise
         conns[fd] = conn
         print(f"accept() = fd {fd} from port {peer[1]}, O_NONBLOCK, added to epoll", flush=True)
 
 
-def echo_until_eagain(fd: int) -> bool:
+def echo_until_eagain(fd: int, pending: dict[int, bytes], epoll: select.epoll) -> bool:
     """Echo everything readable on fd; True when the peer has closed."""
     while True:
         try:
@@ -121,8 +144,37 @@ def echo_until_eagain(fd: int) -> bool:
         print(f"read({fd}) = {len(data)}", flush=True)
         if not data:
             return True
-        os.write(fd, data)  # small echoes fit the send buffer; lesson 1.5 handles EAGAIN here
-        print(f"write({fd}) = {len(data)}", flush=True)
+        if not write_or_keep(fd, data, pending, epoll):
+            return False  # the send buffer is full: stop reading until EPOLLOUT
+
+
+def write_or_keep(fd: int, data: bytes, pending: dict[int, bytes], epoll: select.epoll) -> bool:
+    """Write data; keep what the send buffer refuses in pending[fd]. True if all of it went."""
+    try:
+        sent = os.write(fd, data)  # may take only part of data, or nothing (EAGAIN)
+    except BlockingIOError:
+        sent = 0
+    if sent == len(data):
+        print(f"write({fd}) = {sent}", flush=True)
+        return True
+    pending[fd] = data[sent:]
+    # Watch EPOLLOUT instead of EPOLLIN: wake when the send buffer has room, and read
+    # nothing more from this client until it has taken what we already owe it.
+    epoll.modify(fd, select.EPOLLOUT)
+    result = f"{sent} (short write" if sent else "EAGAIN (send buffer full"
+    print(
+        f"write({fd}) = {result}: {len(pending[fd])} bytes pending, waiting for EPOLLOUT)",
+        flush=True,
+    )
+    return False
+
+
+def flush_pending(fd: int, pending: dict[int, bytes], epoll: select.epoll) -> bool:
+    """EPOLLOUT fired: write what we owe; once it is all gone, read the client again."""
+    if write_or_keep(fd, pending.pop(fd), pending, epoll):
+        epoll.modify(fd, select.EPOLLIN)
+        print(f"epoll_ctl(MOD, fd {fd}, EPOLLIN): output drained, reading again", flush=True)
+    return False
 
 
 def wait_echo(client: socket.socket, message: bytes, timeout: float) -> bool:

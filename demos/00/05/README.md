@@ -38,9 +38,10 @@ just see 00/05                                # the lesson's See It
 
 ## What to look for
 
-- **Blocking mode:** `ss -lnt` shows `Recv-Q 1` while client A is connected: B's connection is complete and waiting, and `strace -tt` shows its `accept4()` exactly when A's `close()` returns.
+- **Blocking mode:** `ss -tan` shows the listener's `Recv-Q 1` while client A is connected: B's connection is complete and waiting (its bytes and even its FIN already received), and `strace -tt` shows its `accept4()` exactly when A's `close()` returns.
 - **Epoll mode:** `read(5, …) = -1 EAGAIN` after every drain. That is how a non-blocking socket says "nothing more now".
 - **On arm64, `epoll_wait()` is `epoll_pwait` in strace**, because arm64 has no `epoll_wait` syscall; libc implements one with the other.
+- **Short writes:** `write()` may take only part of what it is given. Blocking mode loops until every byte is back; epoll mode keeps the rest as a per-connection debt, watches `EPOLLOUT`, and prints `write(5) = 49510 (short write: 16026 bytes pending, waiting for EPOLLOUT)` when a client reads slowly.
 - **`ulimit -n 8`:** `accept()` fails with `EMFILE`, and the connections it could not take stay in the accept queue.
 
 ## Files
@@ -54,4 +55,4 @@ just see 00/05                                # the lesson's See It
 | `rust/main.rs` | Both servers in Rust through `libc` (`accept4`, `fcntl`, `epoll_wait`), not `std::net` or mio |
 | `rust/Cargo.toml`, `rust/Cargo.lock` | Standalone package `demo-00-05`; one dependency, `libc` |
 | `run.sh` | `run.sh LANG [--smoke] [ARGS...]`; re-runs in the lab on macOS |
-| `see.sh` | The lesson's See It: `strace` of both modes, `ss -lnt`, `/proc/<pid>/fd`, `lsof`, `ulimit -n` exhaustion |
+| `see.sh` | The lesson's See It: `strace` of both modes, `ss -tan`, `/proc/<pid>/fd`, `lsof`, `ulimit -n` exhaustion |

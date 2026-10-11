@@ -365,14 +365,19 @@ Four syscalls in four lines: `socket()` (fd 3, the lowest free slot after stdin,
             print(f"read({fd}) = {len(data)}", flush=True)
             if not data:
                 break
-            os.write(fd, data)
-            print(f"write({fd}) = {len(data)}", flush=True)
+            sent = 0
+            while sent < len(data):  # write() may take fewer bytes than asked: send the rest
+                n = os.write(fd, data[sent:])  # blocks while the send buffer is full
+                print(f"write({fd}) = {n}", flush=True)
+                sent += n
         conn.close()
         print(f"close({fd})", flush=True)
         served += 1
 ```
 
 This is the whole blocking model. `listener.accept()` is `accept4(3, …, SOCK_CLOEXEC)`; it sleeps while the accept queue is empty and returns a new fd, which is 4 every time because `close(4)` frees the slot before the next accept. The inner loop calls `read()` until it returns 0 (the peer's FIN), echoing each chunk with `write()`. The demo uses `os.read()` and `os.write()` on the raw fd rather than `conn.recv()` and `conn.send()`, so strace shows `read` and `write`; `socket.recv()` would appear as `recvfrom`, which is what asyncio uses in lesson 0.6.
+
+`write()` returns how many bytes the kernel took, and that can be fewer than you asked for: a signal can interrupt a blocking write part-way, and on a non-blocking socket it is routine (next section). So the echo keeps calling `write()` on the remainder until every byte it read has gone back, and it prints each call's real count. For a 13-byte echo that is always one `write(4) = 13`; an 8 MiB echo in the lab took the same path without losing a byte.
 
 The structural problem is visible in the indentation: while the inner loop runs, nothing calls `accept()`. A second client cannot be served until the first one hangs up.
 
@@ -385,22 +390,39 @@ def serve_epoll(listener: socket.socket, max_clients: int) -> None:
     epoll.register(lfd, select.EPOLLIN)  # epoll_ctl(EPOLL_CTL_ADD)
     …
     conns: dict[int, socket.socket] = {}  # keep the socket objects alive
+    pending: dict[int, bytes] = {}  # bytes read but not yet written back: the loop owes them
     served = 0
-    while max_clients == 0 or served < max_clients:
-        events = epoll.poll()  # epoll_wait(): sleep until some fd is ready
-        ready = ", ".join(f"fd {fd}" for fd, _ in events)
-        print(f"epoll_wait() = {len(events)} ready: {ready}", flush=True)
-        for fd, _ in events:
-            if fd == lfd:
-                accept_all(listener, epoll, conns)
-            elif echo_until_eagain(fd):
-                epoll.unregister(fd)
-                conns.pop(fd).close()
-                print(f"close({fd})", flush=True)
-                served += 1
+    try:
+        while max_clients == 0 or served < max_clients:
+            events = epoll.poll()  # epoll_wait(): sleep until some fd is ready
+            ready = ", ".join(f"fd {fd}" for fd, _ in events)
+            print(f"epoll_wait() = {len(events)} ready: {ready}", flush=True)
+            for fd, _ in events:
+                if fd == lfd:
+                    accept_all(listener, epoll, conns)
+                    continue
+                try:
+                    if fd in pending:  # it watches EPOLLOUT until we have written what we owe
+                        closed = flush_pending(fd, pending, epoll)
+                    else:
+                        closed = echo_until_eagain(fd, pending, epoll)
+                except (ConnectionResetError, BrokenPipeError) as err:
+                    name = errno.errorcode.get(err.errno or 0, err.errno)
+                    print(f"fd {fd}: {name} ({err.strerror}); closing", flush=True)
+                    closed = True
+                if closed:
+                    epoll.unregister(fd)
+                    pending.pop(fd, None)
+                    conns.pop(fd).close()
+                    print(f"close({fd})", flush=True)
+                    served += 1
+    finally:
+        for conn in conns.values():  # a client still connected when the loop ends
+            conn.close()
+        epoll.close()
 ```
 
-`select.epoll()` is `epoll_create1(EPOLL_CLOEXEC)` and returns fd 4. `epoll.register(lfd, EPOLLIN)` is `epoll_ctl(4, EPOLL_CTL_ADD, 3, …)`: "tell me when the listener is readable", which for a listening socket means "the accept queue is non-empty". From then on the thread sleeps in exactly one place, `epoll.poll()`, and everything else is a reaction to what it returns. `epoll.poll()` with no arguments blocks forever (`timeout -1`) and asks for up to `FD_SETSIZE - 1 = 1023` events (`select_epoll_poll_impl()` in [`Modules/selectmodule.c`](https://github.com/python/cpython/blob/3.12/Modules/selectmodule.c)); both numbers are visible in section 8.3. The `conns` dict exists only to keep the Python socket objects alive: if one were garbage-collected, CPython would close its fd behind the loop's back.
+`select.epoll()` is `epoll_create1(EPOLL_CLOEXEC)` and returns fd 4. `epoll.register(lfd, EPOLLIN)` is `epoll_ctl(4, EPOLL_CTL_ADD, 3, …)`: "tell me when the listener is readable", which for a listening socket means "the accept queue is non-empty". From then on the thread sleeps in exactly one place, `epoll.poll()`, and everything else is a reaction to what it returns. `epoll.poll()` with no arguments blocks forever (`timeout -1`) and asks for up to `FD_SETSIZE - 1 = 1023` events (`select_epoll_poll_impl()` in [`Modules/selectmodule.c`](https://github.com/python/cpython/blob/3.12/Modules/selectmodule.c)); both numbers are visible in section 8.3. The `conns` dict keeps the Python socket objects alive (if one were garbage-collected, CPython would close its fd behind the loop's back), and the `finally` closes any client still connected when the loop ends. The `pending` dict is the loop's debt: bytes it has read from a client and not yet managed to write back, explained under "Reading until EAGAIN" below. A peer that resets the connection (`ECONNRESET`, or `EPIPE` on a write) is closed like one that hung up, instead of crashing the server.
 
 ### Accepting until EAGAIN, and surviving EMFILE
 
@@ -421,20 +443,24 @@ def accept_all(listener: socket.socket, epoll: select.epoll, conns: dict) -> Non
             time.sleep(1.0)
             return
         fd = conn.fileno()
-        os.set_blocking(fd, False)
-        epoll.register(fd, select.EPOLLIN)
+        try:
+            os.set_blocking(fd, False)
+            epoll.register(fd, select.EPOLLIN)
+        except OSError:
+            conn.close()  # never leak an accepted fd we failed to set up
+            raise
         conns[fd] = conn
         print(f"accept() = fd {fd} from port {peer[1]}, O_NONBLOCK, added to epoll", flush=True)
 ```
 
-One readiness event on the listener may stand for several queued connections, so the loop accepts until the queue is empty. Python turns `EAGAIN` into `BlockingIOError`, and here it is the normal exit. Each new connection becomes non-blocking and joins the interest set.
+One readiness event on the listener may stand for several queued connections, so the loop accepts until the queue is empty. Python turns `EAGAIN` into `BlockingIOError`, and here it is the normal exit. Each new connection becomes non-blocking and joins the interest set; if either step fails, the accepted socket is closed before the error propagates, so a setup failure never leaks an fd.
 
 The `EMFILE` branch is there because of a nasty interaction between level-triggered epoll and a full fd table. When `accept4()` fails with `EMFILE`, the connection stays in the accept queue, so the listener stays readable, so the very next `epoll_wait()` returns it again, and the loop spins at 100% CPU accepting nothing. Real servers handle this by backing off, by pausing interest in the listener, or by keeping a spare fd to close-accept-close the excess connection. The demo backs off for a second; section 8.5 triggers it with `ulimit -n 8`.
 
-### Reading until EAGAIN
+### Reading until EAGAIN, and writing what you owe
 
 ```python
-def echo_until_eagain(fd: int) -> bool:
+def echo_until_eagain(fd: int, pending: dict[int, bytes], epoll: select.epoll) -> bool:
     """Echo everything readable on fd; True when the peer has closed."""
     while True:
         try:
@@ -445,11 +471,43 @@ def echo_until_eagain(fd: int) -> bool:
         print(f"read({fd}) = {len(data)}", flush=True)
         if not data:
             return True
-        os.write(fd, data)  # small echoes fit the send buffer; lesson 1.5 handles EAGAIN here
-        print(f"write({fd}) = {len(data)}", flush=True)
+        if not write_or_keep(fd, data, pending, epoll):
+            return False  # the send buffer is full: stop reading until EPOLLOUT
 ```
 
-Drain, then go back. `read()` returning bytes means "echo and keep going", `read()` returning `b""` means the peer closed, and `BlockingIOError` (`EAGAIN`) means "nothing more right now: return to `epoll_wait()`". This is the heart of an event loop: a function that does as much as it can without sleeping and then hands control back. The comment on `os.write()` names the shortcut this demo takes: a 13-byte echo always fits the send buffer, so the demo ignores partial writes and `EAGAIN` on write. Lesson 1.5's event-loop server cannot, and keeps per-connection output buffers plus `EPOLLOUT` interest for exactly that case.
+Drain, then go back. `read()` returning bytes means "echo and keep going", `read()` returning `b""` means the peer closed, and `BlockingIOError` (`EAGAIN`) means "nothing more right now: return to `epoll_wait()`". This is the heart of an event loop: a function that does as much as it can without sleeping and then hands control back.
+
+```python
+def write_or_keep(fd: int, data: bytes, pending: dict[int, bytes], epoll: select.epoll) -> bool:
+    """Write data; keep what the send buffer refuses in pending[fd]. True if all of it went."""
+    try:
+        sent = os.write(fd, data)  # may take only part of data, or nothing (EAGAIN)
+    except BlockingIOError:
+        sent = 0
+    if sent == len(data):
+        print(f"write({fd}) = {sent}", flush=True)
+        return True
+    pending[fd] = data[sent:]
+    # Watch EPOLLOUT instead of EPOLLIN: wake when the send buffer has room, and read
+    # nothing more from this client until it has taken what we already owe it.
+    epoll.modify(fd, select.EPOLLOUT)
+    result = f"{sent} (short write" if sent else "EAGAIN (send buffer full"
+    print(
+        f"write({fd}) = {result}: {len(pending[fd])} bytes pending, waiting for EPOLLOUT)",
+        flush=True,
+    )
+    return False
+
+
+def flush_pending(fd: int, pending: dict[int, bytes], epoll: select.epoll) -> bool:
+    """EPOLLOUT fired: write what we owe; once it is all gone, read the client again."""
+    if write_or_keep(fd, pending.pop(fd), pending, epoll):
+        epoll.modify(fd, select.EPOLLIN)
+        print(f"epoll_ctl(MOD, fd {fd}, EPOLLIN): output drained, reading again", flush=True)
+    return False
+```
+
+Writing is the same contract in the other direction. On a non-blocking socket, `write()` takes only what fits in the send buffer: all of it, part of it (`write(5) = 49510` for a 65,536-byte chunk), or nothing (`EAGAIN`). Once the loop has read bytes from a client it owes them back, so `write_or_keep()` keeps the unwritten remainder in `pending[fd]`, switches the fd's interest from `EPOLLIN` to `EPOLLOUT` with `epoll_ctl(MOD)`, and stops reading that client. Reading on while the client is not draining its replies would only pile up more debt in the server's memory; letting the client's own send buffer fill instead pushes the backpressure back to it. When `epoll_wait()` reports the fd writable, `flush_pending()` writes the debt, and once it is paid the interest goes back to `EPOLLIN`. In the lab, an 8 MiB echo to a client that waited half a second before reading printed `write(5) = 49510 (short write: 16026 bytes pending, waiting for EPOLLOUT)` and, after the client caught up, `epoll_ctl(MOD, fd 5, EPOLLIN): output drained, reading again`; the write counts summed to exactly 8,388,608. Lesson 1.5's event-loop HTTP server is this same debt-and-`EPOLLOUT` loop, with an HTTP response as the debt. A 13-byte echo never leaves the fast path, so the See It's traces show only `write(5) = 13`.
 
 Run it in the lab (`epoll` is Linux-only; on macOS `run.sh` re-runs itself in the lab container):
 
@@ -466,21 +524,20 @@ The smoke test runs both modes with two clients and asserts the difference: in b
 TICKETING EXAMPLE: Lesson 1.5's `ticketing rawhttp --model loop` is
 serve_epoll() grown up: the same epoll_wait() at the centre, with
 echo_until_eagain() replaced by "feed bytes to parse_request_head() until it
-says NeedMore", and write() replaced by a per-connection output buffer that
-waits for EPOLLOUT when a slow client's send buffer fills during a large
-`GET /events` response.
+says NeedMore", and pending[fd] holding the unsent part of a large
+`GET /events` response while a slow client's send buffer is full.
 ```
 
 ---
 
 ## 6. Code: Go
 
-The Go port must show the same two servers with **raw syscalls, not the runtime**. That means `syscall.Socket`, `syscall.Bind`, `syscall.Listen`, `syscall.Accept4`, `syscall.Read`, `syscall.Write` and `syscall.Close` on integer fds, `syscall.SetNonblock` to set `O_NONBLOCK` (which Go implements with `fcntl(F_GETFL)` + `fcntl(F_SETFL)`, a visible contrast with CPython's `ioctl(FIONBIO)` in strace), and `syscall.EpollCreate1`, `syscall.EpollCtl` and `syscall.EpollWait` directly. It must not use `net.Listen`: the whole point of lesson 0.6 is that `net.Listen` already hides an epoll loop (the netpoller), and this lesson is about writing that loop by hand. Same flags (`--mode`, `--port`, `--max-clients`, `--smoke`), same port 9005, same output lines (`accept() = fd 5 from port …`, `read(5) = EAGAIN (drained; back to epoll_wait)`), so `see.sh` and the reader's eye can compare the three.
+The Go port must show the same two servers with **raw syscalls, not the runtime**. That means `syscall.Socket`, `syscall.Bind`, `syscall.Listen`, `syscall.Accept4`, `syscall.Read`, `syscall.Write` and `syscall.Close` on integer fds, `syscall.SetNonblock` to set `O_NONBLOCK` (which Go implements with `fcntl(F_GETFL)` + `fcntl(F_SETFL)`, a visible contrast with CPython's `ioctl(FIONBIO)` in strace), and `syscall.EpollCreate1`, `syscall.EpollCtl` and `syscall.EpollWait` directly. It must not use `net.Listen`: the whole point of lesson 0.6 is that `net.Listen` already hides an epoll loop (the netpoller), and this lesson is about writing that loop by hand. Same flags (`--mode`, `--port`, `--max-clients`, `--smoke`), same port 9005, same output lines (`accept() = fd 5 from port …`, `read(5) = EAGAIN (drained; back to epoll_wait)`, `write(5) = … (short write: … bytes pending, waiting for EPOLLOUT)`), so `see.sh` and the reader's eye can compare the three.
 
-The structure is Python's, call for call, on integer fds. Errors are `syscall.Errno` values compared directly (`err == syscall.EAGAIN`) where Python catches `BlockingIOError`; `describe()` formats any other error as `EADDRINUSE (Address already in use)`, from a small name table because the `syscall` package has no `errno.errorcode`. `syscall.EpollEvent` carries the fd in its `Fd` field, which is the 64-bit `data` the kernel hands back. And `EpollWait` can return `EINTR`, which the loop skips: `epoll_wait()` is never restarted after a signal handler, while Python's `epoll.poll()` retries for you (PEP 475). Accepting until `EAGAIN`, and surviving `EMFILE`:
+The structure is Python's, call for call, on integer fds. Errors are `syscall.Errno` values compared directly (`err == syscall.EAGAIN`) where Python catches `BlockingIOError`; `describe()` formats any other error as `EADDRINUSE (Address already in use)`, from a small name table because the `syscall` package has no `errno.errorcode`. `syscall.EpollEvent` carries the fd in its `Fd` field, which is the 64-bit `data` the kernel hands back. And `EpollWait` can return `EINTR`, which the loop skips: `epoll_wait()` is never restarted after a signal handler, while Python's `epoll.poll()` retries for you (PEP 475). Ownership is explicit: accepted fds live in an `open` map that a `defer` closes when `serveEpoll` returns, and `acceptAll` closes a new fd itself if making it non-blocking or registering it fails. Accepting until `EAGAIN`, and surviving `EMFILE`:
 
 ```go
-func acceptAll(lfd, epfd int) error {
+func acceptAll(lfd, epfd int, open map[int]bool) error {
 	for {
 		fd, peer, err := syscall.Accept4(lfd, syscall.SOCK_CLOEXEC)
 		if err == syscall.EAGAIN {
@@ -501,42 +558,51 @@ func acceptAll(lfd, epfd int) error {
 			return os.NewSyscallError("accept4", err)
 		}
 		if err := syscall.SetNonblock(fd, true); err != nil {
+			syscall.Close(fd) // never leak an accepted fd we failed to set up
 			return os.NewSyscallError("fcntl", err)
 		}
-		if err := watch(epfd, fd); err != nil {
+		if err := interest(epfd, syscall.EPOLL_CTL_ADD, fd, syscall.EPOLLIN); err != nil {
+			syscall.Close(fd)
 			return err
 		}
+		open[fd] = true
 		fmt.Printf("accept() = fd %d from port %d, O_NONBLOCK, added to epoll\n", fd, port(peer))
 	}
 }
 ```
 
-The `EMFILE` branch shows a cost of the runtime that this lesson otherwise avoids. With `time.Sleep(time.Second)` in that branch, the `ulimit -n 8` run from section 8.5 crashed the Go port with `runtime: epollcreate failed with 24` and `fatal error: runtime: netpollinit failed`: the first Go timer starts the runtime's own netpoller, which needs an epoll fd, and none were left. A raw `syscall.Nanosleep` sleeps without it, and the port then behaves like Python: `accept() = EMFILE` about once a second while `ss -lnt` shows the connections waiting (`LISTEN 2 16`). Reading until `EAGAIN`:
+The `EMFILE` branch shows a cost of the runtime that this lesson otherwise avoids. With `time.Sleep(time.Second)` in that branch, the `ulimit -n 8` run from section 8.5 crashed the Go port with `runtime: epollcreate failed with 24` and `fatal error: runtime: netpollinit failed`: the first Go timer starts the runtime's own netpoller, which needs an epoll fd, and none were left. A raw `syscall.Nanosleep` sleeps without it, and the port then behaves like Python: `accept() = EMFILE` about once a second while `ss -lnt` shows the connections waiting (`LISTEN 2 16`). Writing what the loop owes:
 
 ```go
-// echoUntilEagain echoes everything readable on fd; it returns true when the peer has closed.
-func echoUntilEagain(fd int, buf []byte) (bool, error) {
-	for {
-		n, err := syscall.Read(fd, buf)
-		if err == syscall.EAGAIN {
-			fmt.Printf("read(%d) = EAGAIN (drained; back to epoll_wait)\n", fd)
-			return false, nil
-		}
-		if err != nil {
-			return false, os.NewSyscallError("read", err)
-		}
-		fmt.Printf("read(%d) = %d\n", fd, n)
-		if n == 0 {
-			return true, nil
-		}
-		// Small echoes fit the send buffer; lesson 1.5 handles EAGAIN here.
-		if _, err := syscall.Write(fd, buf[:n]); err != nil {
-			return false, os.NewSyscallError("write", err)
-		}
-		fmt.Printf("write(%d) = %d\n", fd, n)
+// writeOrKeep writes data and keeps what the send buffer refuses in pending[fd];
+// it returns true if all of data went.
+func writeOrKeep(fd, epfd int, data []byte, pending map[int][]byte) (bool, error) {
+	sent, err := syscall.Write(fd, data) // may take only part of data, or nothing (EAGAIN)
+	if err == syscall.EAGAIN {
+		sent = 0
+	} else if err != nil {
+		return false, os.NewSyscallError("write", err)
 	}
+	if sent == len(data) {
+		fmt.Printf("write(%d) = %d\n", fd, sent)
+		return true, nil
+	}
+	pending[fd] = append([]byte(nil), data[sent:]...)
+	// Watch EPOLLOUT instead of EPOLLIN: wake when the send buffer has room, and read
+	// nothing more from this client until it has taken what we already owe it.
+	if err := interest(epfd, syscall.EPOLL_CTL_MOD, fd, syscall.EPOLLOUT); err != nil {
+		return false, err
+	}
+	result := fmt.Sprintf("%d (short write", sent)
+	if sent == 0 {
+		result = "EAGAIN (send buffer full"
+	}
+	fmt.Printf("write(%d) = %s: %d bytes pending, waiting for EPOLLOUT)\n", fd, result, len(pending[fd]))
+	return false, nil
 }
 ```
+
+One Go-specific detail: `echoUntilEagain` reads into a single buffer that the next `read()` overwrites, so `writeOrKeep` copies the unwritten tail (`append([]byte(nil), data[sent:]...)`) instead of keeping a slice of it. Python's `data[sent:]` and Rust's `extend_from_slice` copy too; in Go a plain `data[sent:]` would alias the buffer and the debt would silently change under the loop.
 
 Run on its own, the epoll server prints the same lines with the same fd numbers as the Python one (`listening fd 3`, `epoll fd 4`, `accept() = fd 5`). Under `--smoke` the numbers shift, because the smoke clients use `net.Dial` in the same process, and `net` starts the netpoller with epoll and eventfd fds of its own.
 
@@ -553,55 +619,46 @@ GODEBUG=schedtrace and the netpoller strace in lesson 0.6 readable.
 
 The Rust port must show the same two servers through the `libc` crate, with a minimal `Cargo.toml` (`libc` as the only dependency): `libc::socket`, `libc::bind`, `libc::listen`, `libc::accept4`, `libc::read`, `libc::write`, `libc::close` and `libc::fcntl` for `O_NONBLOCK`, and `libc::epoll_create1`, `libc::epoll_ctl` and `libc::epoll_wait` for the event loop. It must not use `std::net::TcpListener` or mio: both would hide exactly the calls this lesson is about. Errors come back as `-1` plus `errno` (`std::io::Error::last_os_error()`), and the port should match on `EAGAIN` and `EMFILE` the way the Python demo catches `BlockingIOError` and `OSError`. Same flags, port and output lines as the Python demo.
 
-`check()` and `check_len()` turn libc's -1 into `io::Error::last_os_error()`; the code then matches `e.kind() == io::ErrorKind::WouldBlock` for `EAGAIN` and `e.raw_os_error() == Some(libc::EMFILE)`, the two cases Python catches as `BlockingIOError` and `OSError`. The socket setup, `accept4()` and epoll functions are `#[cfg(target_os = "linux")]`, and a non-Linux `run()` prints the Linux-only line and exits 2. The event loop:
+`check()` and `check_len()` turn libc's -1 into `io::Error::last_os_error()`; the code then matches `e.kind() == io::ErrorKind::WouldBlock` for `EAGAIN` and `e.raw_os_error() == Some(libc::EMFILE)`, the two cases Python catches as `BlockingIOError` and `OSError`. The socket setup, `accept4()` and epoll functions are `#[cfg(target_os = "linux")]`, and a non-Linux `run()` prints the Linux-only line and exits 2. The body of the event loop, once `epoll_wait()` has returned the ready fds:
 
 ```rust
-fn serve_epoll(lfd: RawFd, max_clients: usize) -> io::Result<()> {
-    let epoll = unsafe { OwnedFd::from_raw_fd(check(libc::epoll_create1(libc::EPOLL_CLOEXEC))?) };
-    let epfd = epoll.as_raw_fd();
-    watch(epfd, lfd)?;
-    let pid = std::process::id();
-    println!(
-        "echo-epoll: pid {pid}, listening fd {lfd} on {}, epoll fd {epfd}",
-        local_port(lfd)
-    );
-    let mut events = [libc::epoll_event { events: 0, u64: 0 }; 64];
-    let mut buf = vec![0u8; 65536];
-    let mut served = 0;
-    while max_clients == 0 || served < max_clients {
-        // epoll_wait(): sleep until some fd is ready (-1: no timeout).
-        let ret =
-            unsafe { libc::epoll_wait(epfd, events.as_mut_ptr(), events.len() as libc::c_int, -1) };
-        let n = match check(ret) {
-            Ok(n) => n as usize,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue, // a signal, not readiness
-            Err(e) => return Err(e),
-        };
-        // Copy the fds out: on x86-64 epoll_event is packed, so its fields cannot be borrowed.
-        let ready: Vec<RawFd> = events[..n].iter().map(|event| event.u64 as RawFd).collect();
-        let names: Vec<String> = ready.iter().map(|fd| format!("fd {fd}")).collect();
-        println!("epoll_wait() = {n} ready: {}", names.join(", "));
         for fd in ready {
             if fd == lfd {
-                accept_all(lfd, epfd)?;
-            } else if echo_until_eagain(fd, &mut buf)? {
+                accept_all(lfd, epfd, &mut clients)?;
+                continue;
+            }
+            let Some(client) = clients.get_mut(&fd) else {
+                continue;
+            };
+            // A client with pending output watches EPOLLOUT until we have written what we owe.
+            let result = if client.pending.is_empty() {
+                echo_until_eagain(fd, epfd, &mut buf, &mut client.pending)
+            } else {
+                flush_pending(fd, epfd, &mut client.pending)
+            };
+            let closed = match result {
+                Ok(closed) => closed,
+                Err(e) if matches!(e.raw_os_error(), Some(libc::ECONNRESET | libc::EPIPE)) => {
+                    println!("fd {fd}: {}; closing", describe(&e));
+                    true
+                }
+                Err(e) => return Err(e),
+            };
+            if closed {
                 check(unsafe {
                     libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut())
                 })?;
-                close(fd);
+                clients.remove(&fd); // drops the OwnedFd: close()
                 println!("close({fd})");
                 served += 1;
             }
         }
-    }
-    Ok(())
-}
 ```
 
-Two details are Rust-specific. On x86-64, `libc::epoll_event` is `#[repr(packed)]` (the kernel's layout), and Rust refuses to take a reference to a field of a packed struct, so the loop copies each `u64` into a `Vec<RawFd>` before formatting it. And the epoll fd is wrapped in an `OwnedFd`, so it is closed however `serve_epoll` returns, while client fds are closed explicitly with `close()`, because that `close(5)` line is part of what the lesson shows. `thread::sleep` in the `EMFILE` branch is a plain `nanosleep()`, so the Rust port survives `ulimit -n 8` the way Python does.
+Two details are Rust-specific. On x86-64, `libc::epoll_event` is `#[repr(packed)]` (the kernel's layout), and Rust refuses to take a reference to a field of a packed struct, so the loop copies each `u64` into a `Vec<RawFd>` before formatting it. And every fd is owned: the epoll fd and each accepted client's fd are `OwnedFd`s, the clients live in a `HashMap<RawFd, Client>` next to their pending bytes, and `clients.remove(&fd)` is the `close(5)` the lesson shows. However `serve_epoll` returns, including through `?`, dropping the map closes every client still connected. `thread::sleep` in the `EMFILE` branch is a plain `nanosleep()`, so the Rust port survives `ulimit -n 8` the way Python does.
 
 ```rust
-fn accept_all(lfd: RawFd, epfd: RawFd) -> io::Result<()> {
+fn accept_all(lfd: RawFd, epfd: RawFd, clients: &mut HashMap<RawFd, Client>) -> io::Result<()> {
     loop {
         let (fd, port) = match accept(lfd) {
             Ok(accepted) => accepted,
@@ -618,8 +675,15 @@ fn accept_all(lfd: RawFd, epfd: RawFd) -> io::Result<()> {
             }
             Err(e) => return Err(e),
         };
+        // Owned from here on: if a setup step fails, `?` drops it and the fd is closed.
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
         set_nonblocking(fd)?;
-        watch(epfd, fd)?;
+        interest(epfd, libc::EPOLL_CTL_ADD, fd, libc::EPOLLIN)?;
+        let client = Client {
+            _fd: owned,
+            pending: Vec::new(),
+        };
+        clients.insert(fd, client);
         println!("accept() = fd {fd} from port {port}, O_NONBLOCK, added to epoll");
     }
 }
@@ -668,20 +732,22 @@ printf 'hello from B\n' | nc -N 127.0.0.1 9005 >/dev/null &
 
 Read the timestamps carefully: `strace -tt` prints the time a syscall **started**. The fourth line, `read(4, "", 65536) = 0`, started at `01.100799` and did not return until A's FIN arrived; the next line, `close(4)` at `02.103616`, marks when it did. For that whole second the only thread sat inside one `read()`. B connected at about `01.27` (0.2 s after A), yet its `accept4()` starts at `02.104540`, 0.8 s later and one millisecond after A's `close(4)`. Then B is served in under 1.5 ms: its bytes had been waiting in its receive buffer all along. Add `-T` to the strace command to print each call's duration and see the one-second `read()` directly.
 
-### 8.2 ss -lnt — B waits in the accept queue
+### 8.2 ss -tan — B waits in the accept queue
 
-While A holds its connection open, ask the kernel about the listener:
+While A holds its connection open, ask the kernel about every TCP socket on port 9005, the listener included (this capture comes from a later `just see 00/05` run than 8.1, so the client ports differ):
 
 ```bash
-ss -lnt 'sport = :9005'
+ss -tan 'sport = :9005'
 ```
 
 ```text
-State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
-LISTEN 1      16         127.0.0.1:9005      0.0.0.0:*
+State      Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN     1      16         127.0.0.1:9005      0.0.0.0:*
+CLOSE-WAIT 14     0          127.0.0.1:9005    127.0.0.1:64354
+ESTAB      0      0          127.0.0.1:9005    127.0.0.1:64352
 ```
 
-On a listening socket, `Recv-Q` is the number of established connections in the accept queue and `Send-Q` is its limit, the `16` passed to `listen()` (lesson 0.4). `Recv-Q 1` is client B: handshake done, request bytes delivered, no process attention. This is the kernel's half of Figure 2. Nothing in the server's output mentions B yet, because no syscall has touched it.
+On a listening socket, `Recv-Q` is the number of established connections in the accept queue and `Send-Q` is its limit, the `16` passed to `listen()` (lesson 0.4). `Recv-Q 1` is client B. The other two rows are the connections themselves. `ESTAB … 64352` is A, accepted as fd 4, the one the server is blocked in `read()` on. `CLOSE-WAIT 14 … 64354` is B, and it shows how much happened without the process: the handshake completed, B's 13 bytes arrived, and so did its FIN (B's `nc -N` hung up right after sending), which moved the socket to `CLOSE-WAIT` and counts as one more unit in `Recv-Q`, 13 + 1 = 14. All of that sits in kernel memory, owned by no fd. This is the kernel's half of Figure 2. Nothing in the server's output mentions B yet, because no syscall has touched it.
 
 ### 8.3 strace — the epoll server: O_NONBLOCK, readiness, EAGAIN
 
@@ -769,24 +835,29 @@ Cap the server at 8 open files and send it five clients that each stay connected
 ```bash
 bash -c 'ulimit -n 8; exec python3 demos/00/05/python/main.py --mode epoll' &
 for _ in 1 2 3 4 5; do (sleep 3 | nc 127.0.0.1 9005 >/dev/null &); done
-ss -lnt 'sport = :9005'
+ss -tan 'sport = :9005'
 ```
 
 ```text
-State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
 LISTEN 2      16         127.0.0.1:9005      0.0.0.0:*
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62550
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62540
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62570
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62546
+ESTAB  0      0          127.0.0.1:9005    127.0.0.1:62562
 ```
 
-The server's last lines of output:
+The server's last lines of output, from the same run:
 
 ```text
-accept() = EAGAIN (accept queue empty)
-accept() = fd 7 from port 55342, O_NONBLOCK, added to epoll
+accept() = fd 6 from port 62546, O_NONBLOCK, added to epoll
+accept() = fd 7 from port 62550, O_NONBLOCK, added to epoll
 accept() = EMFILE (no free fd; the connection stays queued)
 accept() = EMFILE (no free fd; the connection stays queued)
 ```
 
-Eight slots: 0, 1 and 2 are stdio, 3 is the listener and 4 is the epoll instance, which leaves 5, 6 and 7 for clients. The fourth `accept4()` fails with `EMFILE`, and `ss` shows the two connections that could not get an fd still sitting in the accept queue (`Recv-Q 2`). From those clients' side nothing is wrong: their `connect()` succeeded and their bytes were accepted by the kernel. The `EMFILE` line repeats once per second because the demo backs off; without the `time.sleep(1.0)` in `accept_all()`, level-triggered epoll would report the listener readable on every iteration, and the loop would spin at full speed.
+Eight slots: 0, 1 and 2 are stdio, 3 is the listener and 4 is the epoll instance, which leaves 5, 6 and 7 for clients. The fourth `accept4()` fails with `EMFILE`, and `ss` shows the two connections that could not get an fd still sitting in the accept queue (`Recv-Q 2`): five `ESTAB` rows on the server side, three of them owned by fds 5–7 and two (ports 62562 and 62570) by nobody yet. From those clients' side nothing is wrong: their `connect()` succeeded and their bytes were accepted by the kernel. The `EMFILE` line repeats once per second because the demo backs off; without the `time.sleep(1.0)` in `accept_all()`, level-triggered epoll would report the listener readable on every iteration, and the loop would spin at full speed.
 
 ### Reproduce
 
@@ -822,7 +893,7 @@ just see 00/05
 | `demos/00/05/rust/main.rs` | The blocking and raw-epoll servers through the `libc` crate: `accept4`, `read`, `write`, `fcntl`, `epoll_create1`/`epoll_ctl`/`epoll_wait` | Rust |
 | `demos/00/05/rust/Cargo.toml`, `demos/00/05/rust/Cargo.lock` | The `libc` dependency and the `demo-00-05` binary | TOML |
 | `demos/00/05/run.sh` | `run.sh LANG [--smoke] [ARGS...]`; re-runs in the lab on macOS | Bash |
-| `demos/00/05/see.sh` | Reproducible See It: strace of both modes, `ss -lnt`, `/proc/<pid>/fd`, `lsof`, `ulimit -n 8` | Bash |
+| `demos/00/05/see.sh` | Reproducible See It: strace of both modes, `ss -tan`, `/proc/<pid>/fd`, `lsof`, `ulimit -n 8` | Bash |
 | `demos/00/05/README.md` | What the demo shows, its flags and what to look for | Markdown |
 | `scripts/see/common.sh` | `see_run`, `see_log`, `expect_match` used by `see.sh` | Bash |
 | `scripts/capture/strace.sh` | Timed strace capture wrapper for any process (`-p PID`) | Bash |
