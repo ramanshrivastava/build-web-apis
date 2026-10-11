@@ -59,26 +59,23 @@ see_sh "ethtool -S $iface | grep -E 'drop|miss|kicks' | head -n 6"
 see_run sysctl net.core.netdev_budget net.core.netdev_budget_usecs net.core.netdev_max_backlog
 see_run cat "/sys/class/net/$iface/queues/rx-0/rps_cpus"
 # /proc/interrupts is masked inside Docker containers; /sys/kernel/irq has the same counts.
+# Each command below is logged exactly as run, so the lesson can print it verbatim.
 dev="$(basename "$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || echo none)")"
 if [ -n "$(head -c 1 /proc/interrupts 2>/dev/null)" ]; then
   see_sh "grep -E '$iface|$dev' /proc/interrupts | head -n 4"
 else
-  see_log "\$ grep -l $dev /sys/kernel/irq/*/actions   # /proc/interrupts is masked in containers"
-  for d in /sys/kernel/irq/*; do
-    grep -q -E "^($dev|$iface)" "$d/actions" 2>/dev/null || continue
-    irqs="$(awk -F, '{for (i = 1; i <= NF; i++) s += $i} END {print s}' "$d/per_cpu_count")"
-    percpu="$(awk -F, '{for (i = 1; i <= NF; i++) if ($i > 0) printf "cpu%d=%s ", i - 1, $i}' \
-      "$d/per_cpu_count")"
-    pkts=$(($(cat "/sys/class/net/$iface/statistics/rx_packets") + \
-      $(cat "/sys/class/net/$iface/statistics/tx_packets")))
-    see_log "irq $(basename "$d") ($(cat "$d/actions")): $irqs interrupts, $percpu"
-    see_log "packets (rx+tx) on $iface: $pkts, packets per interrupt: $((pkts / (irqs > 0 ? irqs : 1)))"
-  done
+  see_sh "grep -H -E '^($dev|$iface)' /sys/kernel/irq/*/actions"
+  irq_dir="$(grep -l -E "^($dev|$iface)" /sys/kernel/irq/*/actions 2>/dev/null | head -n 1 | xargs -r dirname)"
+  if [ -n "$irq_dir" ]; then
+    see_sh "cat $irq_dir/per_cpu_count"
+    sum_irqs="tr , '\\n' < $irq_dir/per_cpu_count | awk '{s += \$1} END {print s}'"
+    see_sh "$sum_irqs"
+    stats="/sys/class/net/$iface/statistics"
+    see_sh "echo \$(( (\$(cat $stats/rx_packets) + \$(cat $stats/tx_packets)) / \$($sum_irqs) ))"
+  fi
 fi
-see_log "\$ cat /proc/net/softnet_stat   # decoded: one row per CPU, first four CPUs"
-while read -r -a f; do
-  see_log "cpu$((16#${f[12]:-0})) processed=$((16#${f[0]})) dropped=$((16#${f[1]})) time_squeeze=$((16#${f[2]}))"
-done < <(head -n 4 /proc/net/softnet_stat)
+see_sh "head -n 2 /proc/net/softnet_stat"
+see_sh "head -n 4 /proc/net/softnet_stat | while read -r -a f; do echo \"cpu\$((16#\${f[12]})) processed=\$((16#\${f[0]})) dropped=\$((16#\${f[1]})) time_squeeze=\$((16#\${f[2]}))\"; done"
 
 see_log "## 4. the MTU: the route's limit, then a NIC we shrink ourselves"
 see_run ip route get "$gw"

@@ -683,11 +683,11 @@ RX:			256
 
 ### 8.4 sysctl, rps_cpus, /sys/kernel/irq and softnet_stat — NAPI at work
 
+NAPI's limits and the RPS mask (this section's captures come from a later `just see 00/01` run than 8.3, so the counters are slightly higher):
+
 ```bash
 sysctl net.core.netdev_budget net.core.netdev_budget_usecs net.core.netdev_max_backlog
 cat /sys/class/net/eth0/queues/rx-0/rps_cpus
-grep -l virtio0 /sys/kernel/irq/*/actions    # irq 14; then cat /sys/kernel/irq/14/per_cpu_count
-cat /proc/net/softnet_stat
 ```
 
 ```text
@@ -695,14 +695,45 @@ net.core.netdev_budget = 300
 net.core.netdev_budget_usecs = 2000
 net.core.netdev_max_backlog = 1000
 3ffe
-irq 14 (virtio0): 15787252 interrupts, cpu0=15787252 
-packets (rx+tx) on eth0: 60372240, packets per interrupt: 3
-cpu0 processed=8213718 dropped=0 time_squeeze=5373
-cpu1 processed=10237510 dropped=0 time_squeeze=4315
-cpu2 processed=10246469 dropped=0 time_squeeze=4365
 ```
 
-The first three lines are NAPI's limits from section 3: at most 300 frames or 2000 µs per `net_rx_action()` run, and 1000 packets per CPU backlog. `/proc/interrupts` is masked by the container runtime and reads as empty inside the lab, so `see.sh` finds the NIC's interrupt in `/sys/kernel/irq/*/actions` (on a bare-metal host, `grep eth0 /proc/interrupts` shows the same counts). It sums the per-CPU counts and divides the device's packet counters by them: 60 million packets over 15.8 million interrupts, about three packets per interrupt, which is NAPI batching. Every interrupt landed on `cpu0`, yet `/proc/net/softnet_stat` (decoded from hex by `see.sh`: column 1 is `processed`, 2 `dropped`, 3 `time_squeeze`) shows cpu1 and cpu2 processing *more* packets than cpu0: that is RPS, with mask `3ffe` sending the protocol work to CPUs 1–13. The `time_squeeze` values in the thousands mean `net_rx_action()` ran out of budget or time that many times on each CPU; `dropped=0` means no backlog ever overflowed.
+The first three lines are NAPI's limits from section 3: at most 300 frames or 2000 µs per `net_rx_action()` run, and 1000 packets per CPU backlog. `3ffe` is the RPS mask: CPUs 1–13 may do the protocol work for this queue.
+
+`/proc/interrupts` is masked by the container runtime and reads as empty inside the lab (on a bare-metal host, `grep eth0 /proc/interrupts` shows the same counts). The kernel exposes each IRQ under `/sys/kernel/irq/<n>/` too: find the NIC's IRQ by its action name, read its per-CPU counts, total them, and divide the device's packet counters by the total:
+
+```bash
+grep -H -E '^(virtio0|eth0)' /sys/kernel/irq/*/actions
+cat /sys/kernel/irq/14/per_cpu_count
+tr , '\n' < /sys/kernel/irq/14/per_cpu_count | awk '{s += $1} END {print s}'
+echo $(( ($(cat /sys/class/net/eth0/statistics/rx_packets) + $(cat /sys/class/net/eth0/statistics/tx_packets)) / $(tr , '\n' < /sys/kernel/irq/14/per_cpu_count | awk '{s += $1} END {print s}') ))
+```
+
+```text
+/sys/kernel/irq/14/actions:virtio0
+16098757,0,0,0,0,0,0,0,0,0,0,0,0,0
+16098762
+3
+```
+
+IRQ 14 belongs to `virtio0`, the device behind `eth0`. All of its 16.1 million interrupts landed on `cpu0` (the second line is one count per CPU; the total read a moment later is five higher). Dividing the 60-odd million packets the NIC has moved by those interrupts gives 3: on average three packets per interrupt, which is NAPI batching at work.
+
+`/proc/net/softnet_stat` has one row of hexadecimal counters per CPU; column 1 is `processed`, column 2 `dropped`, column 3 `time_squeeze`, and column 13 the CPU number:
+
+```bash
+head -n 2 /proc/net/softnet_stat
+head -n 4 /proc/net/softnet_stat | while read -r -a f; do echo "cpu$((16#${f[12]})) processed=$((16#${f[0]})) dropped=$((16#${f[1]})) time_squeeze=$((16#${f[2]}))"; done
+```
+
+```text
+00a40441 00000000 00001585 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+00c47114 00000000 0000114b 00000000 00000000 00000000 00000000 00000000 00000000 00114915 00000000 00000000 00000001 00000000 00000000
+cpu0 processed=10748993 dropped=0 time_squeeze=5509
+cpu1 processed=12874004 dropped=0 time_squeeze=4427
+cpu2 processed=12186459 dropped=0 time_squeeze=4453
+cpu3 processed=11274837 dropped=0 time_squeeze=4393
+```
+
+Every interrupt landed on `cpu0`, yet cpu1, cpu2 and cpu3 each processed *more* packets than cpu0: that is RPS, with mask `3ffe` sending the protocol work to CPUs 1–13 (column 10 of cpu1's raw row, `00114915`, counts the RPS wake-ups it received). The `time_squeeze` values in the thousands mean `net_rx_action()` ran out of budget or time that many times on each CPU; `dropped=0` means no backlog ever overflowed.
 
 ### 8.5 ip route get and ping -M do — the route's MTU
 
