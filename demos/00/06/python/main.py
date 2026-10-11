@@ -87,6 +87,9 @@ def main() -> int:
     parser.add_argument("--buf-size", type=int, default=65536, help="bytes per read()")
     parser.add_argument("--smoke", action="store_true", help="50 clients, then exit")
     args = parser.parse_args()
+    if args.buf_size <= 0:  # a zero-byte read() returns b"" at once, like a closed peer
+        print("echo-asyncio: --buf-size must be a positive byte count")
+        return 2
     if args.smoke:
         return asyncio.run(smoke(args.port))
     with contextlib.suppress(KeyboardInterrupt):

@@ -36,7 +36,7 @@ After reading this document, you will understand:
 Key mental models to internalize:
 
 - **Inside a runtime, data flows when kernel readiness becomes a resumed waiter, and stops wherever a waiter is parked, the GIL is held, or a worker never returns to its loop**: `epoll_wait()` reports an fd readable; asyncio's `_run_once()`, Go's netpoller and tokio's I/O driver each turn that report into a coroutine, goroutine or task that runs again and calls `read()`. The bytes wait in the socket's receive buffer (lesson 0.4) until that happens. A coroutine parked on a future, a goroutine in `gopark()`, a task that returned `Poll::Pending`, a thread waiting for the GIL, a CPU-bound handler hogging the only event-loop thread: those are the stops.
-- **A runtime is lesson 0.5's epoll loop plus a scheduler.** Every `await reader.read()`, `conn.Read(buf)` and `stream.read(&mut buf).await` is the same five steps: try `read()`, get `EAGAIN`, register interest, park, resume after `epoll_wait()` says go, and try `read()` again.
+- **A runtime is lesson 0.5's epoll loop plus a scheduler.** All three wait the same way: a waiter (coroutine, goroutine, task) is attached to an fd and parked, one thread blocks in `epoll_wait()`, and readiness on that fd resumes the waiter. Who calls `read()`, and when, differs. Go's `conn.Read` tries `read()` first and parks only if it returns `EAGAIN`. asyncio's `await reader.read()` never touches the socket: the transport calls `recvfrom()` from a loop callback once epoll reports the fd readable, and the bytes it gets complete the coroutine's future. tokio's `stream.read().await` first checks the readiness the I/O driver has cached for the fd, calls `read()` only when that says ready, and returns `Pending` (clearing the readiness on `EAGAIN`) until the driver sets it again.
 - **Parked costs memory, not threads.** An idle connection is a few kilobytes of heap and stack in every runtime, not an OS thread. A few kilobytes times a hundred thousand connections is still gigabytes.
 - **Threads are a pool sized by the runtime, not a mapping from connections.** asyncio runs on one thread, Go runs GOMAXPROCS processors on a handful of OS threads, tokio starts one worker per CPU.
 
@@ -130,7 +130,7 @@ The GIL (global interpreter lock) is the mutex that lets only one thread at a ti
 
 `Py_BEGIN_ALLOW_THREADS` saves the current thread state and releases the GIL; `Py_END_ALLOW_THREADS` takes it back. Between them runs `sock_recv_impl()`, so while one thread sleeps inside `recvfrom()` in the kernel, any other thread can run Python code. Two details matter:
 
-- **Timeouts are a `poll()` first.** If the socket has a timeout (or is non-blocking), `sock_call_ex()` first calls `internal_select()`, which is a `poll()` on that one fd, and only then calls `sock_func`. A Python socket with `settimeout(1.0)` is a non-blocking fd plus a `poll()` per call, not a kernel timer on the socket.
+- **Timeouts are a `poll()` first.** Only when the socket has a positive timeout, or the call is a `connect()` waiting to complete, does `sock_call_ex()` first call `internal_select()`, which is a `poll()` on that one fd, and only then `sock_func` (`int has_timeout = (timeout > 0);` and `if (has_timeout || connect)` in CPython 3.12.3). A Python socket with `settimeout(1.0)` is a non-blocking fd plus a `poll()` per call, not a kernel timer on the socket. `setblocking(False)` is a timeout of 0: no `poll()`, the syscall runs at once, and `EAGAIN` comes straight back.
 - **`EAGAIN` becomes an exception.** On a non-blocking socket with no timeout, `recv()` returning `-1 EAGAIN` surfaces as `BlockingIOError`. That is what lesson 0.5's epoll server caught, and what asyncio's transports catch.
 
 Section 8.7 measures the effect: a thread spinning in Python gets about twice as many iterations while the main thread is blocked in `recv()` as it does while the main thread is also running Python.
@@ -219,7 +219,7 @@ logs it, because 150 ms is over the loop's slow_callback_duration of 0.1 s.
 
 ## 3. Go: internal/poll, the Netpoller and the Scheduler
 
-Go hides the loop more thoroughly than asyncio. There is no `await` and no event-loop object: a handler calls `conn.Read(buf)` and the call looks blocking. Underneath, the fd is non-blocking and `Read` is lesson 0.5's drain-until-`EAGAIN` with the runtime's scheduler in place of the `while True` loop.
+Go hides the loop more thoroughly than asyncio. There is no `await` and no event-loop object: a handler calls `conn.Read(buf)` and the call looks blocking. Underneath, the fd is non-blocking, and each `Read` is one attempt at lesson 0.5's non-blocking `read()`, with the runtime's scheduler in place of the `epoll_wait()` loop: it returns as soon as a `read()` returns bytes, and parks the goroutine only when its `read()` says `EAGAIN`.
 
 ### 3.1 Every net fd is non-blocking and edge-triggered
 
@@ -233,7 +233,7 @@ func netpollopen(fd uintptr, pd *pollDesc) uintptr {
 	ev.Events = syscall.EPOLLIN | syscall.EPOLLOUT | syscall.EPOLLRDHUP | syscall.EPOLLET
 ```
 
-Both directions at once, edge-triggered (`EPOLLET`), with a pointer to the fd's `pollDesc` in the event's data field. Edge-triggered means epoll reports a change once, not a state repeatedly, so a reader must drain to `EAGAIN` before parking again; that is exactly what `FD.Read` does. It also explains a line in section 8.4 that looks odd at first: the first event for a fresh connection is `EPOLLOUT`, because a new socket's send buffer is empty and therefore writable.
+Both directions at once, edge-triggered (`EPOLLET`), with a pointer to the fd's `pollDesc` in the event's data field. Edge-triggered means epoll reports a change once, not a state repeatedly, so a goroutine may park only after its own `read()` has seen `EAGAIN`: had it parked with bytes still unread, no new edge would ever come to wake it. `FD.Read` keeps that rule without draining anything itself. It returns after the first `read()` that returns bytes (`src/internal/poll/fd_unix.go`, lines 148–159 in Go 1.23.12), the application's next `Read` call consumes more, and only a call whose `read()` returns `EAGAIN` parks. It also explains a line in section 8.4 that looks odd at first: the first event for a fresh connection is `EPOLLOUT`, because a new socket's send buffer is empty and therefore writable.
 
 `netpollinit()` also creates an `eventfd` and registers it. That is the runtime's way to interrupt a thread blocked in `epoll_wait()` (`netpollBreak()`), the same job asyncio's self-pipe does.
 
@@ -586,7 +586,7 @@ Everything below was captured in the lab on kernel 7.0.14-linuxkit (Docker Deskt
 for n in 1 2 3; do (sleep 0.2; printf 'hello %s\n' "$n") | nc -N 127.0.0.1 9006; done
 ```
 
-The 0.2 s pause matters: the server's first `read()` finds nothing, so every runtime has to park and be woken by epoll, which is the path this lesson is about. On arm64, every `epoll_wait()` in these traces appears as `epoll_pwait`.
+The 0.2 s pause matters: when a connection arrives there is nothing to read yet, so every runtime has to park its waiter and be woken by epoll, which is the path this lesson is about. On arm64, every `epoll_wait()` in these traces appears as `epoll_pwait`.
 
 The design spec suggested a `gdb` breakpoint in `sock_recv` to watch CPython drop the GIL. That does not work in this lab: Ubuntu's `/usr/bin/python3.12` is stripped (`file` reports `stripped`), `gdb -batch -ex 'info functions ^sock_recv' /usr/bin/python3.12` finds no symbols, and debuginfod returned none either. Section 2.1's source reading plus the measurement in 8.7 replace it. Likewise `tokio-console` and `RUST_LOG=mio=trace` need extra crates (`console-subscriber`, a `tracing` subscriber) in the Rust port; they belong to the Porter's version or to lesson 6.2.
 
@@ -624,18 +624,18 @@ py-spy dump --pid $!
 ```
 
 ```text
-Thread 13355 (idle): "MainThread"
+Thread 46430 (idle): "MainThread"
     select (selectors.py:468)
     _run_once (asyncio/base_events.py:1949)
     run_forever (asyncio/base_events.py:641)
     run_until_complete (asyncio/base_events.py:674)
     run (asyncio/runners.py:118)
     run (asyncio/runners.py:194)
-    main (main.py:89)
-    <module> (main.py:94)
+    main (main.py:96)
+    <module> (main.py:101)
 ```
 
-`py-spy` reads the interpreter's frames from outside the process, without stopping it for long and without debug symbols (it cannot attach to a process that is already being traced, which is why `see.sh` starts a second, untraced server for this step). The idle server sits in `select` at `selectors.py:468`, which in Ubuntu's Python 3.12.3 is the `fd_event_list = self._selector.poll(timeout, max_ev)` line shown in section 2.2, called from `_run_once` at `base_events.py:1949`, the `event_list = self._selector.select(timeout)` line. `(idle)` means the thread is off-CPU: inside `epoll_pwait()`, with the GIL released, because `select.epoll.poll()` wraps its syscall in `Py_BEGIN_ALLOW_THREADS` too.
+`py-spy` reads the interpreter's frames from outside the process, without stopping it for long and without debug symbols (it cannot attach to a process that is already being traced, which is why `see.sh` starts a second, untraced server for this step). The idle server sits in `select` at `selectors.py:468`, which in Ubuntu's Python 3.12.3 is the `fd_event_list = self._selector.poll(timeout, max_ev)` line shown in section 2.2, called from `_run_once` at `base_events.py:1949`, the `event_list = self._selector.select(timeout)` line, under `asyncio.run(run_forever(...))` at `main.py:96` and `sys.exit(main())` at `main.py:101` in the demo (this excerpt comes from a later `just see 00/06` run than 8.1, after the demo gained its `--buf-size` check). `(idle)` means the thread is off-CPU: inside `epoll_pwait()`, with the GIL released, because `select.epoll.poll()` wraps its syscall in `Py_BEGIN_ALLOW_THREADS` too.
 
 ### 8.3 GODEBUG=schedtrace and /proc — goroutines on a few threads
 
@@ -830,7 +830,7 @@ just see 00/06
 
 | Concept | Key Takeaway |
 |---------|--------------|
-| The shared shape | Every runtime does `read()` → `EAGAIN` → register → park → `epoll_wait()` → resume → `read()`; the differences are who parks and who polls |
+| The shared shape | Park a waiter on an fd, block in `epoll_wait()`, resume the waiter on readiness; Go reads first and parks on `EAGAIN`, asyncio's transport reads in a callback and completes a future, tokio reads only when its cached readiness says so |
 | GIL around socket calls | `sock_call_ex()` releases the GIL for the syscall; threads overlap I/O but not Python bytecode |
 | selectors | `DefaultSelector` picks kqueue or epoll; `EpollSelector.select()` maps `None` to `-1` and `maxevents` to the number of registered fds |
 | asyncio loop | One thread; `_run_once()` polls with timeout `0` when callbacks are ready, blocks otherwise; transports read 256 KiB at a time and send immediately |
