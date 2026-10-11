@@ -122,6 +122,10 @@ func main() {
 	bufSize := flag.Int("buf-size", 65536, "bytes per read (the per-connection buffer)")
 	smokeFlag := flag.Bool("smoke", false, "50 clients, then exit")
 	flag.Parse()
+	if *bufSize <= 0 { // a zero-length Read returns (0, nil) at once: the handler would spin
+		fmt.Println("echo-goroutines: --buf-size must be a positive byte count")
+		os.Exit(2)
+	}
 	if *smokeFlag {
 		os.Exit(smoke(*port))
 	}
