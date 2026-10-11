@@ -151,7 +151,9 @@ fn run(
         read_total += reader.read(&mut buf)? as u64;
         if elapsed >= next_report {
             let sent = sender.sent.load(Relaxed);
-            let in_kernel = sent as i64 - read_total as i64; // sender's Send-Q + reader's Recv-Q
+            // An estimate of the bytes still in kernel buffers: completed send() calls
+            // minus bytes read (ss's Send-Q + Recv-Q is the kernel's own, overlapping view).
+            let in_kernel = sent as i64 - read_total as i64;
             let rate = read_total as f64 / elapsed / 1024.0;
             let blocked = sender.blocked_for().as_secs_f64() * 1000.0;
             println!(
