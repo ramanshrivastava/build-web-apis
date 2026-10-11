@@ -66,12 +66,20 @@ func describeIPv4(packet []byte) (string, int) {
 	if len(packet) < 20 {
 		return "short IPv4 header", -1
 	}
-	ihl := int(packet[0]&0x0f) * 4 // header length in 32-bit words
+	version, ihl := packet[0]>>4, int(packet[0]&0x0f)*4 // ihl: header length in 32-bit words
+	if version != 4 || ihl < 20 || len(packet) < ihl {
+		return "malformed IPv4 header", -1
+	}
 	proto := packet[9]
 	src, dst := net.IP(packet[12:16]), net.IP(packet[16:20])
 	name, ok := ipProtos[proto]
 	if !ok {
 		name = fmt.Sprintf("proto %d", proto)
+	}
+	// Fragment offset in bytes: a later fragment carries payload, not the TCP/UDP header.
+	offset := int(binary.BigEndian.Uint16(packet[6:8])&0x1fff) * 8
+	if offset != 0 {
+		return fmt.Sprintf("%s %s > %s fragment at byte %d", name, src, dst, offset), -1
 	}
 	if (proto == 6 || proto == 17) && len(packet) >= ihl+4 {
 		sport := binary.BigEndian.Uint16(packet[ihl:]) // TCP and UDP both start with the ports
