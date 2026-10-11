@@ -122,8 +122,10 @@ async fn main() -> ExitCode {
             }
             "--buf-size" => {
                 i += 1;
-                let Some(value) = args.get(i).and_then(|b| b.parse().ok()) else {
-                    println!("echo-tokio: --buf-size needs a byte count");
+                // Zero is refused too: a zero-length read returns Ok(0) at once, like a closed peer.
+                let Some(value) = args.get(i).and_then(|b| b.parse().ok()).filter(|&b| b > 0)
+                else {
+                    println!("echo-tokio: --buf-size must be a positive byte count");
                     return ExitCode::from(2);
                 };
                 buf_size = value;
